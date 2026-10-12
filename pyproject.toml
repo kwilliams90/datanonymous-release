@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "datanonymous"
+version = "0.1.0"
+description = "Profile tabular files and write shape-faithful synthetic copies for building code against student data without exposing it"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.12"
+dependencies = [
+    "pandas>=3.0",
+    "numpy>=2.2",
+    "pyarrow>=18",
+    "openpyxl>=3.1",
+    "xlrd>=2.0",
+    "click>=8.1",
+    "PyYAML>=6.0",
+    # Pinned exactly: Faker output for a given seed can change between releases (design D24/D26).
+    "Faker==40.40.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "hypothesis>=6.100",
+]
+
+[project.scripts]
+datanonymous = "datanonymous.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+datanonymous = ["data/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# tests/_tmp holds scratch runs whose directory-mode tests leave link loops: never collect it
+norecursedirs = [".*", "_tmp", "build", "dist", "*.egg-info", "venv*"]
+pythonpath = ["src"]
+markers = [
+    "slow: long-running performance or large-file tests",
+    "stats: statistical fidelity tests",
+]
+addopts = "-m 'not slow'"

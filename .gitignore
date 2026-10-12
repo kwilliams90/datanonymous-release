@@ -1,0 +1,30 @@
+# environments
+.venv/
+venv*/
+.env
+
+# python build/cache
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.hypothesis/
+
+# tool run outputs (never commit runs against real data)
+datanonymous-out/
+*-report/
+tests/_tmp/
+
+# editors / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+
+# design notes and agent docs stay local (repo = code, examples, usage docs)
+docs/
+CLAUDE.md
+AGENTS.md
+.claude/

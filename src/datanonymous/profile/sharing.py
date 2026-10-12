@@ -1,0 +1,638 @@
+"""Private generation views for sharing: local-person rare-unit suppression (D42/43).
+
+Capture evidence while raw rows exist. Never infer people from row counts or
+borrow holders from a sibling fact table or a code lookup. Source profiles and
+registries stay intact for the independent verification stage.
+"""
+
+from __future__ import annotations
+
+from collections import Counter
+from copy import deepcopy
+from dataclasses import replace
+import re
+from typing import Any
+
+import numpy as np
+
+from ..detect import dates as date_detect
+from ..detect import text as text_detect
+from ..errors import GenerationError
+from ..hints import header_hints, tokens
+from ..model import LEVEL_TYPES, NEVER_COPY_TYPES, ColumnModel, ColumnProfile, ColumnType, Message, MissingnessModel, RawTable, TableProfile
+from ..generate.quota import largest_remainder
+from ..generate import sharing_numeric
+from . import entity
+
+EVIDENCE_KEY = "_sharing_local_holders"
+SOURCE_MODEL_KEY = "_sharing_source_model"
+SOURCE_COLUMN_KEY = "_sharing_source_column"
+SUPPRESSED_KEY = "_sharing_suppressed_units"
+PERSON_DATE_KEY = "_sharing_person_date"
+LOOKUP_KEY = "_sharing_lookup"
+
+
+def _other_person_attribute(p: ColumnProfile) -> bool:
+    """Recognizable intrinsic attributes need support from their own actors.
+
+    Student keys cannot establish how many parents supplied a name, income or
+    birth date: twenty children can share one parent. Neither a role-labelled
+    ID nor a matching attribute by itself proves the actor ownership needed
+    for these support counts. Until that contract is established, sharing
+    refuses such attributes, including in putative lookup tables (D48/D49).
+
+    A role word alone is not enough: ordinary Teacher_Comments and
+    Parent_Contact_Date can describe the student's record. Recognizable PII
+    inside those comments still needs support from its own actors.
+    """
+    if not entity.other_person_header(p.name):
+        return False
+    if header_hints(p.name).pii is not None or p.type in {
+        ColumnType.PERSON_NAME, ColumnType.EMAIL, ColumnType.PHONE, ColumnType.SSN,
+        ColumnType.STREET_ADDRESS, ColumnType.CITY, ColumnType.STATE, ColumnType.ZIP,
+        ColumnType.IP, ColumnType.URL, ColumnType.LAT, ColumnType.LON,
+    }:
+        return True
+    attributes = {
+        "age", "birth", "birthday", "dob", "gender", "sex", "race", "ethnicity",
+        "ethnic", "nationality", "citizenship", "language", "marital", "education",
+        "educational", "degree", "qualification", "qualifications", "occupation",
+        "employment", "employer", "income", "salary", "wage", "wages", "earnings",
+        "credential", "credentials", "certification", "license", "licence",
+    }
+    if attributes.intersection(tokens(p.name)):
+        return True
+    if p.model is not None:
+        from ..generate.embedded import pii_spans
+
+        return any(isinstance(raw, str) and pii_spans(raw, digit_phone=True)
+                   for raw in p.model.nonmissing_counts)
+    return False
+
+
+def _level_column(p: ColumnProfile) -> bool:
+    # Discrete numeric measures keep their separate numeric policy; a numeric
+    # category explicitly typed FACTOR still follows this level policy.
+    return (p.type in LEVEL_TYPES and p.type is not ColumnType.EMPTY or p.type in (ColumnType.STATE, ColumnType.ZIP)
+            or p.type is ColumnType.DIGIT_CODE and bool(p.params.get("levels_mode")))
+
+
+def _key(raw: Any) -> str:
+    return "\x00native-null" if raw is None else text_detect.unit_key(str(raw))
+
+
+def _variant(raw: Any) -> str:
+    # unit_holders case-folds its keys; hex preserves the exact raw spelling,
+    # whitespace, punctuation and case that quota generation would retain.
+    return "v:" + repr(None if raw is None else str(raw)).encode("utf-8").hex()
+
+
+def _date_tokens(p: ColumnProfile) -> set[str]:
+    return set(p.params.get("sentinels") or ()) | set(p.params.get("_other_tokens") or ())
+
+
+def _invented(p: ColumnProfile) -> bool:
+    return (p.type in NEVER_COPY_TYPES - {ColumnType.IDENTIFIER} or p.type is ColumnType.CITY
+            or p.type is ColumnType.DIGIT_CODE and not p.params.get("levels_mode"))
+
+
+def _shape(raw: str) -> str:
+    # Keep word lengths, case, digits, punctuation, whitespace and non-ASCII
+    # details: all can survive a same-shape pseudonym and identify its donor.
+    return "".join("A" if "A" <= c <= "Z" else "a" if "a" <= c <= "z"
+                   else "0" if "0" <= c <= "9" else c for c in raw)
+
+
+def _retained_semantics(kind: str, raw: str) -> str:
+    """Source subdomains or literal vocabulary retained by the PII makers."""
+    if kind == "email":
+        return raw.rpartition("@")[2].casefold()
+    if kind in ("url", "domain"):
+        return raw.split("://", 1)[-1].split("/", 1)[0].casefold()
+    if kind == "phone":
+        from ..privacy.digits import phone_base
+
+        base = phone_base(raw)
+        return repr((base[0][:3] if base[2] else base[0][:-7], base[1:])) if base else "unsupported"
+    if kind == "person_name":
+        from ..generate.pii import _CAMEL_PARTS, _NAME_PREFIXES, _NAME_TOKEN_RE
+        from ..generate.text import case_style
+
+        kept = text_detect.NAME_PARTICLES | text_detect.NAME_SUFFIXES | text_detect.NAME_TITLES | {"and"}
+        literals = [("word", w.casefold()) for w in re.findall(r"[^\W\d_]+", raw) if w.casefold() in kept]
+        for chunk in re.split(r"(\s+|,)", raw):
+            tokens = _NAME_TOKEN_RE.findall(chunk)
+            for i, token in enumerate(tokens):
+                if not token[0].isalpha():
+                    continue
+                following = tokens[i + 1] if i + 1 < len(tokens) else ""
+                if len(token) <= 2 and following in ("'", "\u2019") and i + 2 < len(tokens):
+                    literals.append(("apostrophe", token + following))
+                parts = _CAMEL_PARTS.findall(token) if case_style(token) == "mixed" else []
+                if len(parts) > 1 and "".join(parts) == token and parts[0].casefold() in _NAME_PREFIXES:
+                    literals.append(("surname-prefix", parts[0]))
+        return repr(literals)
+    if kind in ("street_address", "address"):
+        kept = (set(text_detect.STREET_SUFFIXES) | text_detect.DIRECTIONALS | text_detect.UNIT_WORDS
+                | text_detect.US_STATE_ABBR | text_detect.NAME_SUFFIXES | {"st", "nd", "rd", "th"})
+        return repr([w.casefold() for w in re.findall(r"[^\W\d_]+", raw) if w.casefold() in kept])
+    if kind == "city":
+        from ..generate.pii import _CITY_STATE_RE
+
+        match = _CITY_STATE_RE.fullmatch(raw.strip())
+        return match.group("state") if match else ""
+    if kind == "digit_code":
+        return str(len(raw.strip()) - len(raw.strip().lstrip("0")))
+    return ""
+
+
+def _generation_classes(p: ColumnProfile) -> dict[Any, str]:
+    """Private source classes whose exact shape/frequency the generator preserves."""
+    if p.model is None:
+        return {}
+    values = [v for v in p.model.nonmissing_counts if isinstance(v, str)]
+    if not values:
+        return {}
+    if _invented(p):
+        from ..generate.embedded import pii_spans
+        from ..generate.text import _lead_digit
+
+        spans = {v: [(v[a:b], kind) for a, b, kind in pii_spans(v, digit_phone=True)] for v in values}
+        span_counts: Counter = Counter()
+        group_counts: Counter = Counter()
+        for raw in values:
+            count = int(p.model.nonmissing_counts[raw])
+            group_counts[raw.strip().casefold()] += count
+            for part, kind in spans[raw]:
+                span_counts[kind, part.strip().casefold()] += count
+        bases = {}
+        variants: dict[str, list[tuple]] = {}
+        span_variants: dict[tuple[str, str], list[tuple]] = {}
+        for raw in values:
+            embedded = [(kind, _shape(part), span_counts[kind, part.strip().casefold()],
+                         _retained_semantics(kind, part)) for part, kind in spans[raw]]
+            base = (_shape(raw), int(p.model.nonmissing_counts[raw]), _lead_digit(raw.strip()),
+                    _retained_semantics(p.type.value.lower(), raw), embedded)
+            bases[raw] = base
+            variants.setdefault(raw.strip().casefold(), []).append(base)
+            for part, kind in spans[raw]:
+                span_variants.setdefault((kind, part.strip().casefold()), []).append(base)
+        return {raw: repr((base, group_counts[raw.strip().casefold()],
+                           sorted(variants[raw.strip().casefold()], key=repr),
+                           [(kind, sorted(span_variants[kind, part.strip().casefold()], key=repr))
+                            for part, kind in spans[raw]])).encode("utf-8").hex()
+                for raw, base in bases.items()}
+    if p.type in date_detect.DATE_TYPES:
+        params = {k: v for k, v in p.params.items() if k not in ("sentinels", "_other_tokens")}
+        if not params.get("formats"):
+            from ..generate.dates import _params
+
+            params = _params(replace(p, params=deepcopy(params)), p.model)
+        view = date_detect.view(params, [v.strip() for v in values])
+        return {raw: repr((int(view.sod[i]) if view.kind == "time" else int(view.dur[i]) if view.kind == "duration"
+                           else int(view.mon[i]), int(view.cls[i]), str(view.tz[i]), int(view.digits[i]),
+                           raw[:len(raw) - len(raw.lstrip())], raw[len(raw.rstrip()):])).encode("utf-8").hex()
+                for i, raw in enumerate(values) if view.cls[i] >= 0}
+    return {}
+
+
+def _check_embedded_relationships(columns: list[ColumnProfile]) -> None:
+    """Repeated span identities can preserve an identifiable co-occurrence graph.
+
+    Marginal frequencies and even whole context multisets cannot prove a graph
+    has multiple possible donors. Sharing currently refuses those contracts.
+    """
+    from ..generate.embedded import pii_spans
+
+    seen: dict[tuple[str, str], tuple[int, str, bool]] = {}
+    for p in columns:
+        if p.role in ("excluded", "null", "id") or p.model is None or not _invented(p):
+            continue
+        for raw in p.model.nonmissing_counts:
+            if not isinstance(raw, str):
+                continue
+            for a, b, kind in pii_spans(raw, digit_phone=True):
+                part = raw[a:b]
+                embedded = bool(raw[:a].strip() or raw[b:].strip())
+                key = kind, part.strip().casefold()
+                previous = seen.get(key)
+                if previous and (previous[0], previous[1]) != (p.index, raw) and (embedded or previous[2]):
+                    _refuse(p, "has a repeated embedded PII relationship whose source graph cannot be safely retained")
+                seen[key] = (p.index, raw, embedded or bool(previous and previous[2]))
+
+
+def _units(p: ColumnProfile, raw: Any) -> list[str]:
+    if p.model is None:
+        return []
+    if raw in p.model.missing_counts:
+        return ["m:" + _key(raw), _variant(raw)]
+    if sharing_numeric.discrete(p) and (key := sharing_numeric.normalized_key(p, raw)) is not None:
+        return ["n:" + key, _variant(raw)]
+    if not isinstance(raw, str):
+        return []
+    if _level_column(p):
+        return ["u:" + _key(raw), _variant(raw)]
+    if p.type is ColumnType.MULTI_SELECT:
+        d = p.params.get("delimiter")
+        items = [t.strip() for t in raw.split(d) if t.strip()] if d else [raw.strip()]
+        return ["u:" + _key(t) for t in dict.fromkeys(items)] + ["c:" + repr(tuple(sorted({_key(t) for t in items}))), _variant(raw)]
+    if p.type is ColumnType.NUMERIC_WITH_TOKENS:
+        tokens = text_detect.unit_texts(p, raw)
+        return ["u:" + _key(t) for t in tokens] + ([_variant(raw)] if tokens else [])
+    if p.type in date_detect.DATE_TYPES and raw.strip() in _date_tokens(p):
+        return ["u:" + _key(raw), _variant(raw)]
+    return []
+
+
+def record_evidence(tp: TableProfile, raw: RawTable, settings: Any) -> None:
+    """Capture exact local distinct-person counts after profiling, before dropping raw rows.
+
+    All units count, including standard vocabulary and missing spellings. Blank
+    person keys share one unknown holder through d35_keys, never one per row.
+    This metadata is private and does not change source stats or public params.
+    """
+    keys = entity.d35_keys(raw, tp.columns, tp.entity, settings)
+    counts: dict[int, dict[str, int]] = {}
+    classes: dict[int, dict[str, int]] = {}
+    numbers: dict[int, dict[str, int]] = {}
+    date_buckets: dict[int, dict[str, int]] = {}
+    for p in tp.columns:
+        if p.model is None or p.role in ("excluded", "null", "id"):
+            continue
+        if p.model.n_nonmissing and _other_person_attribute(p):
+            # These keys count the row's subject, not the attribute's actor.
+            # Do not store those counts as evidence for another person's data.
+            continue
+        values = raw.columns[p.index].values
+        # unit_holders ignores native None; an internal marker lets missing
+        # native nulls participate in the same per-person counting operation.
+        nullable = any(v is None for v in p.model.missing_counts)
+        counted_values = np.asarray(["\x00native-null" if v is None else v for v in values], dtype=object) if nullable else values
+
+        def units(v: Any, p: ColumnProfile = p, nullable: bool = nullable) -> list[str]:
+            return _units(p, None if nullable and v == "\x00native-null" else v)
+
+        signatures = _generation_classes(p)
+
+        def signature(v: Any) -> list[str]:
+            return [signatures[v]] if v in signatures else []
+
+        numeric_keys = ({v: sharing_numeric.normalized_key(p, v)
+                         for v in (*p.model.nonmissing_counts, *p.model.missing_counts)}
+                        if p.type in sharing_numeric.TYPES else {})
+
+        def numeric(v: Any) -> list[str]:
+            key = numeric_keys.get(v)
+            return ["n:" + key] if key is not None else []
+
+        bucket_keys = {}
+        if p.type in date_detect.DATE_TYPES - {ColumnType.TIME, ColumnType.DURATION}:
+            from ..generate.sharing_dates import calendar_bucket_keys
+
+            bucket_values = [*p.model.nonmissing_counts, *p.model.missing_counts]
+            bucket_keys = dict(zip(bucket_values, calendar_bucket_keys(p, bucket_values)))
+
+        def date_bucket(v: Any) -> list[str]:
+            key = bucket_keys.get(v)
+            return [key] if key is not None else []
+
+        for destination, extract in ((counts, units), (classes, signature), (numbers, numeric), (date_buckets, date_bucket)):
+            held = text_detect.unit_holders(counted_values, p, texts=extract)
+            if not held:
+                continue
+            for index in keys.keys:
+                got = text_detect.unit_holders(counted_values, p, index, extract)
+                held = {k: min(c, got.get(k, 0)) for k, c in held.items()}
+            destination[p.index] = held
+    one_per_person = bool(keys.people and keys.keys and all(len(np.unique(k)) == raw.n_rows for k in keys.keys))
+    tp.private.extra[EVIDENCE_KEY] = {"people": bool(keys.people), "counts": counts, "classes": classes, "numbers": numbers,
+                                      "date_buckets": date_buckets if keys.people else {},
+                                      "one_row_per_person": one_per_person}
+
+
+def _clone_model(model: ColumnModel | None) -> ColumnModel | None:
+    if model is None:
+        return None
+    extra = dict(model.extra)
+    extra[SOURCE_MODEL_KEY] = model.extra.get(SOURCE_MODEL_KEY, model)
+    # These source-specific allocations must not restore suppressed levels or
+    # impose source donor counts on the fictional population.
+    for key in ("_row_counts", "_row_bins", "_generation_model", "_pseudonym_inverse", "floored_levels", "floored_extremes"):
+        extra.pop(key, None)
+    return replace(model, nonmissing_counts=dict(model.nonmissing_counts), missing_counts=dict(model.missing_counts), extra=extra)
+
+
+def _refuse(p: ColumnProfile, reason: str) -> None:
+    raise GenerationError(f"sharing mode: column {p.name!r} {reason}",
+                          fix=f"--null {p.name} or --exclude {p.name}; use --person-id COL when a column identifies the row's person")
+
+
+def _rescale(counts: dict[Any, int], n: int) -> dict[Any, int]:
+    if not counts:
+        return {}
+    allocated = largest_remainder(list(counts.values()), n)
+    return {k: int(c) for k, c in zip(counts, allocated) if c}
+
+
+def _protect_model(p: ColumnProfile, model: ColumnModel, rare: set[str]) -> ColumnModel:
+    nm: Counter = Counter()
+    missing = {v: c for v, c in model.missing_counts.items() if "m:" + _key(v) not in rare and _variant(v) not in rare}
+    for raw, count in model.nonmissing_counts.items():
+        units = _units(p, raw)
+        if any(u in rare for u in units):
+            continue
+        nm[raw] += int(count)
+    if not nm and not missing and model.n_nonmissing + model.n_missing:
+        _refuse(p, "has no category or missing value supported by enough distinct people in this table")
+    total = model.n_nonmissing + model.n_missing
+    # Suppressed units get zero rows. Reassign their mass within the same
+    # missing/nonmissing group, or to the only remaining supported group.
+    nm_target = model.n_nonmissing if missing else total
+    missing_target = model.n_missing if nm else total
+    return replace(model, nonmissing_counts=_rescale(dict(nm), nm_target),
+                   missing_counts=_rescale(missing, missing_target))
+
+
+def _related_columns(tp: TableProfile, *, composite: bool = True) -> set[int]:
+    """Columns whose source relationship could restore suppressed units."""
+    names = {p.name: p.index for p in tp.columns}
+    involved: set[int] = set()
+    for fd in tp.structure.private.get("fds", ()):
+        involved.update(int(fd[k]) for k in ("det", "dep") if k in fd)
+    if composite:
+        for key in tp.structure.private.get("composite", ()):
+            involved.update(int(i) for i in key.get("cols", ()))
+    for entry in tp.structure.derived_templates:
+        if entry.get("column") in names:
+            involved.add(names[entry["column"]])
+        for name in entry.get("inputs", ()):
+            if name in names:
+                involved.add(names[name])
+    for entry in tp.structure.private.get("templates", ()):
+        involved.add(int(entry["target"]))
+        involved.update(int(part[1]) for part in entry.get("parts", ()) if part[0] == "f")
+    for target, entry in tp.structure.private.get("rule_targets", {}).items():
+        involved.add(int(target))
+        involved.update(int(member[0]) for member in entry.get("members", ()))
+    # Declared inequalities may regenerate one side from source residuals.
+    for entry in tp.structure.declared_rules:
+        for value in entry.values():
+            if isinstance(value, str) and value in names:
+                involved.add(names[value])
+    return involved
+
+
+def _independent_missingness(columns: list[ColumnProfile], n: int) -> MissingnessModel:
+    rows = [p for p in columns if p.role == "row" and p.model is not None]
+    model = MissingnessModel(columns=[p.index for p in rows])
+    counts = [p.model.n_missing for p in rows]
+    cuts = sorted({0, n, *counts})
+    # The pool sampler independently draws each column's marginal. These
+    # artificial interval patterns encode totals, never source row patterns.
+    model.pooled = [(tuple(c > a for c in counts), b - a) for a, b in zip(cuts, cuts[1:]) if b > a]
+    return model
+
+
+def _trim_native(p: ColumnProfile, rare: set[str]) -> None:
+    if not p.native:
+        return
+    removed = {u[2:] for u in rare}
+    source = p.model.extra.get(SOURCE_COLUMN_KEY, p)
+
+    def kept(value: Any) -> bool:
+        return _key(value) not in removed and not set(_units(source, value)).intersection(rare)
+
+    native = p.native
+    labels = native.get("labels")
+    if isinstance(labels, dict):
+        native["labels"] = {k: v for k, v in labels.items() if kept(v)}
+    values = native.get("dictionary_values")
+    if isinstance(values, list):
+        keep = [i for i, v in enumerate(values) if kept(v)]
+        native["dictionary_values"] = [values[i] for i in keep]
+        dictionary = native.get("dictionary")
+        if dictionary is not None:
+            native["dictionary"] = dictionary.take(np.asarray(keep, dtype=np.int64))
+
+
+def _native_units(p: ColumnProfile) -> set[str]:
+    if not _level_column(p) and p.type is not ColumnType.MULTI_SELECT:
+        return set()  # non-label dictionaries are rebuilt from synthetic values by the writers
+    native = p.native or {}
+    values = list((native.get("labels") or {}).values()) + list(native.get("dictionary_values") or ())
+    return {u for v in values if v is not None for u in (_units(p, v) or ["u:" + _key(v)])}
+
+
+def _check_native_storage(p: ColumnProfile) -> None:
+    """Exact Excel format quotas have no local-person or joint-format proof."""
+    native = p.native or {}
+    if native.get("kind") != "excel":
+        return
+    storage = native.get("storage")
+    if isinstance(storage, dict):
+        classes = {(kind, fmt) for kind, formats in storage.items()
+                   for fmt, count in formats.items() if count > 0}
+    else:
+        formats = native.get("formats") or {}
+        classes = {(kind, formats.get(kind) or "General") for kind, count in (native.get("types") or {}).items()
+                   if count > 0}
+    if len(classes) > 1:
+        _refuse(p, "has mixed Excel cell types or number formats without distinct-person support for their retained quotas")
+
+
+def _trim_params(p: ColumnProfile, rare: set[str]) -> None:
+    removed = {u[2:] for u in rare}
+    source = p.model.extra.get(SOURCE_COLUMN_KEY, p)
+
+    def kept(value: Any) -> bool:
+        return _key(value) not in removed and not set(_units(source, value)).intersection(rare)
+
+    for key in ("levels", "level_order", "tokens", "_tokens", "_other_tokens", "pair"):
+        values = p.params.get(key)
+        if isinstance(values, (list, tuple)):
+            p.params[key] = [v for v in values if kept(v)]
+    for key in ("sentinels", "variant_groups"):
+        values = p.params.get(key)
+        if isinstance(values, dict):
+            p.params[key] = {v: c for v, c in values.items() if kept(v)}
+    for key in ("value", "token"):
+        if key in p.params and not kept(p.params[key]):
+            p.params.pop(key)
+
+
+def _structural_contracts(tp: TableProfile, dates: set[int]) -> None:
+    sensitive = {p.index for p in tp.columns if p.role == "id" or _invented(p)} | dates
+    for fd in tp.structure.private.get("fds", ()):
+        if not fd.get("overridden") and sensitive.intersection((fd["det"], fd["dep"])):
+            _refuse(tp.columns[fd["dep"]], "has a source person dependency that cannot preserve fictional relationships")
+    # A template's source grouping carries the original distinct/frequency
+    # relationship even after its input labels become fictional.
+    for template in tp.structure.private.get("templates", ()):
+        if template.get("groups") or sensitive.intersection(
+                {template["target"]} | {part[1] for part in template.get("parts", ()) if part[0] == "f"}):
+            _refuse(tp.columns[template["target"]], "has a source template relationship that cannot be safely regenerated")
+
+
+def verify_values(profile: ColumnProfile, values: Any) -> list[Message]:
+    """Check final rendered/re-read values after every structural and privacy repair."""
+    if profile.model is None or profile.role in ("null", "excluded"):
+        return []
+    source = profile.model.extra.get(SOURCE_COLUMN_KEY) or replace(
+        profile, model=profile.model.extra.get(SOURCE_MODEL_KEY, profile.model))
+    suppressed = set(profile.model.extra.get(SUPPRESSED_KEY, ()))
+    raw = list(values)
+    # Rereaders may normalize the case/spacing of a missing token. Its source
+    # spelling need not still occur in the protected missing-count dictionary.
+    hits = sum(bool((set(_units(source, value)) | {"u:" + _key(value), "m:" + _key(value), _variant(value)}) & suppressed)
+               for value in raw) if suppressed else 0
+    messages = []
+    if hits:
+        messages.append(Message("error", "sharing_rare_unit_restored",
+                                f"{hits} generated value(s) restored a locally suppressed category or missing value",
+                                column=profile.name, fix="null or exclude this column"))
+    if profile.params.get(PERSON_DATE_KEY):
+        from ..generate.sharing_dates import cover_violations, normalized_keys, source_extremes
+
+        forbidden = source_extremes(profile)
+        dates = sum(k in forbidden for k in normalized_keys(profile, raw) if k is not None)
+        if dates:
+            messages.append(Message("error", "sharing_date_extreme_restored",
+                                    f"{dates} generated value(s) restored an original normalized person-date extreme",
+                                    column=profile.name, fix="null or exclude this column"))
+        restored_cover = cover_violations(profile, raw)
+        if restored_cover:
+            messages.append(Message("error", "sharing_date_cover_restored",
+                                    f"{restored_cover} generated value(s) restored a masked calendar group",
+                                    column=profile.name, fix="null or exclude this column"))
+    if profile.params.get(sharing_numeric.MARKER):
+        forbidden = sharing_numeric.forbidden_extremes(profile)
+        hits = sum(sharing_numeric.normalized_key(source, value) in forbidden for value in raw)
+        if hits:
+            messages.append(Message("error", "sharing_numeric_extreme_restored",
+                                    f"{hits} generated value(s) restored an original normalized numeric extreme",
+                                    column=profile.name, fix="null or exclude this column"))
+    return messages
+
+
+def protect_profile(tp: TableProfile, settings: Any) -> TableProfile:
+    """Clone a source profile and protect the generation models, preserving source evidence.
+
+    Caller must capture record_evidence while raw rows exist. A planner-proven
+    lookup may set LOOKUP_KEY; this never supplies holders to a fact table.
+    """
+    evidence = tp.private.extra.get(EVIDENCE_KEY) or {}
+    lookup = tp.private.extra.get(LOOKUP_KEY) is True
+    k = max(10, int(getattr(settings, "min_cell", 10)))
+    columns = [replace(p, params=deepcopy(p.params), flags=dict(p.flags), messages=list(p.messages),
+                       model=_clone_model(p.model), native=deepcopy(p.native)) for p in tp.columns]
+    private = replace(tp.private, extra=dict(tp.private.extra), entity_models={i: _clone_model(m) for i, m in tp.private.entity_models.items()})
+    structure = deepcopy(tp.structure)
+    out = replace(tp, header=list(tp.header), entity=deepcopy(tp.entity), layout=deepcopy(tp.layout),
+                  columns=columns, private=private, structure=structure, messages=list(tp.messages))
+    related = _related_columns(tp)
+    value_contracts = _related_columns(tp, composite=False)
+    changed: set[int] = set()
+    person_dates: set[int] = set()
+    _check_embedded_relationships(columns)
+    for p in columns:
+        if p.role in ("excluded", "null"):
+            continue
+        _check_native_storage(p)
+        if p.model is None or p.role == "id":
+            continue
+        if p.model.n_nonmissing and _other_person_attribute(p):
+            raise GenerationError(
+                f"sharing mode: column {p.name!r} contains an intrinsic attribute of another person; "
+                "distinct-person support for that actor has not been established",
+                fix=f"--null {p.name} or --exclude {p.name}",
+            )
+        source = tp.columns[p.index]
+        p.model.extra[SOURCE_COLUMN_KEY] = source
+        requested = {u for raw in (*source.model.nonmissing_counts, *source.model.missing_counts) for u in _units(source, raw)} | _native_units(source)
+        held = (evidence.get("counts") or {}).get(p.index, {})
+        if requested and not lookup and not evidence.get("people"):
+            _refuse(p, "cannot establish distinct-person support for its categories or missing values")
+        rare = {u for u in requested if int(held.get(u, 0)) < k} if not lookup else set()
+        if rare:
+            if p.type in (ColumnType.NUMERIC_FORMATTED, ColumnType.NUMERIC_WITH_TOKENS, ColumnType.DECIMAL) and any(u.startswith("n:") for u in rare):
+                _refuse(p, "has a rare discrete numeric value that interpolation can restore")
+            if p.index in related:
+                _refuse(p, "has rare units in a structural key, dependency or rule that cannot be safely regenerated")
+            p.model = _protect_model(source, p.model, rare)
+            if p.index in private.entity_models:
+                private.entity_models[p.index] = _protect_model(source, private.entity_models[p.index], rare)
+            p.model.extra[SUPPRESSED_KEY] = frozenset(rare)
+            _trim_native(p, rare)
+            _trim_params(p, rare)
+            if p.type is ColumnType.MULTI_SELECT:
+                # Sampling items independently could rebuild an eliminated
+                # source combination (including another ordering of its items).
+                p.params["mode"] = "combinations"
+            changed.add(p.index)
+            p.flags["sharing_rare_units_suppressed"] = True
+        if not lookup and p.type in sharing_numeric.TYPES and p.model.n_nonmissing:
+            if not evidence.get("people"):
+                _refuse(p, "cannot establish distinct-person support for its numeric measures")
+            if p.index in related:
+                _refuse(p, "has numeric extrema in a structural contract that cannot be safely regenerated")
+            number_holders = (evidence.get("numbers") or {}).get(p.index, {})
+            forbidden = frozenset(key for key in sharing_numeric.source_extremes(source)
+                                  if int(number_holders.get("n:" + key, 0)) < k)
+            p.params[sharing_numeric.MARKER] = True
+            if forbidden:
+                p.params["_no_exact_extremes"] = True
+            p.model.extra[sharing_numeric.FORBIDDEN_KEY] = forbidden
+            p.model = sharing_numeric.protect_model(source, p.model, forbidden)
+            if p.index in private.entity_models:
+                private.entity_models[p.index].extra[sharing_numeric.FORBIDDEN_KEY] = forbidden
+                private.entity_models[p.index] = sharing_numeric.protect_model(source, private.entity_models[p.index], forbidden)
+            p.flags["sharing_numeric_extremes_removed"] = bool(forbidden)
+            changed.add(p.index)
+        person_date = (p.type in date_detect.DATE_TYPES and p.type not in (ColumnType.TIME, ColumnType.DURATION)
+                       and (p.params.get("person_level") or header_hints(p.name).pii == "dob"
+                            or p.role == "entity" or evidence.get("people")))
+        if person_date:
+            from ..generate.sharing_dates import BUCKET_HOLDERS_KEY, BUCKET_MIN_KEY, validate_bucket_support
+
+            bucket_holders = dict((evidence.get("date_buckets") or {}).get(p.index, {}))
+            p.model.extra[BUCKET_HOLDERS_KEY] = bucket_holders
+            p.model.extra[BUCKET_MIN_KEY] = k
+            if p.index in private.entity_models:
+                private.entity_models[p.index].extra[BUCKET_HOLDERS_KEY] = bucket_holders
+                private.entity_models[p.index].extra[BUCKET_MIN_KEY] = k
+            validate_bucket_support(p)
+            person_dates.add(p.index)
+            p.params[PERSON_DATE_KEY] = True
+            p.params["_no_exact_extremes"] = True
+            if p.index in value_contracts:
+                _refuse(p, "has a protected person date in a structural contract that cannot be safely regenerated")
+            from ..generate.sharing_dates import normalized_keys, source_extremes
+
+            missing = list(source.model.missing_counts)
+            extrema = source_extremes(source)
+            date_missing = {"m:" + _key(v) for v, key in zip(missing, normalized_keys(source, missing)) if key in extrema}
+            if date_missing:
+                p.model = _protect_model(source, p.model, date_missing)
+                p.model.extra[SUPPRESSED_KEY] = frozenset(set(p.model.extra.get(SUPPRESSED_KEY, ())) | date_missing)
+                if p.index in private.entity_models:
+                    private.entity_models[p.index] = _protect_model(source, private.entity_models[p.index], date_missing)
+                changed.add(p.index)
+        if not lookup and p.model.n_nonmissing and (_invented(p) or p.type in date_detect.DATE_TYPES):
+            if not evidence.get("people"):
+                _refuse(p, "cannot establish distinct-person support for its retained date, text or PII classes")
+            signatures = _generation_classes(source)
+            held_classes = (evidence.get("classes") or {}).get(p.index, {})
+            if any(int(held_classes.get(signature, 0)) < k for raw, signature in signatures.items()
+                   if raw in p.model.nonmissing_counts):
+                _refuse(p, "has a date, text or PII format/frequency class supported by fewer than the required distinct people")
+    _structural_contracts(out, person_dates)
+    # Source joint missingness can identify one pattern donor even when every
+    # marginal is common. Only independent protected marginals survive.
+    structure.missingness = _independent_missingness(columns, tp.n_rows)
+    if changed:
+        private.extra["_sharing_suppressed_columns"] = frozenset(changed)
+    private.extra["_sharing_source_profile"] = tp
+    return out
+
+
+__all__ = ["record_evidence", "protect_profile", "verify_values", "EVIDENCE_KEY", "SOURCE_MODEL_KEY", "SUPPRESSED_KEY", "PERSON_DATE_KEY", "LOOKUP_KEY"]

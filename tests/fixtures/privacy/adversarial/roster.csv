@@ -1,0 +1,81 @@
+﻿state_id,student_name,nickname,guardian_phone,medical_alert,program,notes,score
+1093049531,"Nkemelu-Haverford, Ysolde",Perpetua,(713) 682-8228,Bee sting allergy,None,,58
+1128178404,"Tregarthen, Idunn",Cyprian,(274) 453-9112,,None,,43
+1133247605,"Marchetti-Valecourt, Ondine",Kerensa,(826) 934-9767,Latex allergy,SPED,,66
+1255546887,"Brightwater, Tamsin",Casimira,(711) 531-7007,,None,,95
+1308032716,"Achterhof, Dashiell",Dashiell,(217) 428-3715,,None,,49
+1531577712,"O’Rourkevich, Hesper",Marguerite,(228) 871-9697,Bee sting allergy,GT,,79
+1579602735,"Pennymore, Kerensa",Ondine,(225) 771-9610,,None,,86
+1626668373,"D’Alessandrova, Amarantha",Evadne,(391) 246-9633,Epilepsy seizure plan,SPED,,71
+1705459859,"Oyelowo, Perpetua",Ysolde,(266) 782-9813,,SPED,,63
+1927168981,"Fennimore, Severin",Severin,(385) 484-8937,Latex allergy,None,,41
+2026701359,"Quennell, Ottilie",Gwenllian,(931) 518-2739,Severe peanut allergy,GT,,82
+2038323340,"Kasprowicz, Evadne",Amarantha,(650) 971-7098,,SPED,,45
+2364941575,"Nkemelu-Haverford, Ignatia",Lysander,(274) 580-7375,Type 1 diabetes,SPED,,56
+2382423239,"Tregarthen, Marguerite",Hesper,(363) 292-2069,,GT,,59
+2413345529,"Marchetti-Valecourt, Thorvald",Thorvald,(521) 532-1257,Type 1 diabetes,ELL,,97
+2511902345,"Brightwater, Casimira",Tamsin,(217) 353-5512,,GT,,62
+2695758167,"Achterhof, Lysander",Ignatia,(373) 971-8739,,None,,70
+2748872611,"O’Rourkevich, Cyprian",Idunn,(875) 459-9721,,SPED,,97
+2932799501,"Pennymore, Gwenllian",Ottilie,(452) 227-5519,,SPED,,93
+3318368578,"D’Alessandrova, Jessamy",Jessamy,(881) 530-5610,Asthma inhaler,GT,,58
+3475739260,"Oyelowo, Ysolde",Perpetua,(295) 269-5330,,GT,,49
+3628372756,"Fennimore, Idunn",Cyprian,(615) 758-9966,,ELL,,63
+3662449888,"Quennell, Ondine",Kerensa,(864) 440-7121,,None,,78
+3741504019,"Kasprowicz, Tamsin",Casimira,(881) 661-7879,,ELL,,92
+3862827464,"Nkemelu-Haverford, Dashiell",Dashiell,(408) 263-5853,,ELL,,51
+3867574406,"Tregarthen, Hesper",Marguerite,(707) 632-2443,,None,,94
+3877423254,"Marchetti-Valecourt, Kerensa",Ondine,(837) 249-2960,,None,,82
+3946905022,"Brightwater, Amarantha",Evadne,(285) 764-2502,,ELL,,45
+4062513556,"Achterhof, Perpetua",Ysolde,(899) 782-5494,,None,,64
+4143989444,"O’Rourkevich, Severin",Severin,(477) 235-3507,,ELL,,99
+4219583484,"Pennymore, Ottilie",Gwenllian,(751) 615-7306,Bee sting allergy,GT,,87
+4355269536,"D’Alessandrova, Evadne",Amarantha,(802) 290-9516,,SPED,,83
+4562749435,"Oyelowo, Ignatia",Lysander,(910) 497-4385,Latex allergy,GT,,91
+4604757563,"Fennimore, Marguerite",Hesper,(477) 698-9066,,SPED,,73
+4635807297,"Quennell, Thorvald",Thorvald,(429) 365-1426,,ELL,,45
+4643863116,"Kasprowicz, Casimira",Tamsin,(476) 534-5039,,SPED,,48
+4781085463,"Nkemelu-Haverford, Lysander",Ignatia,(459) 352-3805,Severe peanut allergy,None,,45
+4922256768,"Tregarthen, Cyprian",Idunn,(284) 275-2831,,SPED,,45
+5044584207,"Marchetti-Valecourt, Gwenllian",Ottilie,(406) 487-6976,Severe peanut allergy,SPED,,96
+5209089126,"Brightwater, Jessamy",Jessamy,(507) 286-3640,,SPED,,85
+5436727954,"Achterhof, Ysolde",Perpetua,(669) 448-9886,Type 1 diabetes,SPED,,58
+5524874881,"O’Rourkevich, Idunn",Cyprian,(286) 557-9346,,None,,62
+5946758455,"Pennymore, Ondine",Kerensa,(657) 692-6678,,GT,,49
+5961331083,"D’Alessandrova, Tamsin",Casimira,(298) 224-8322,Type 1 diabetes,None,,69
+6014420616,"Oyelowo, Dashiell",Dashiell,(358) 695-6224,Asthma inhaler,ELL,,47
+6055213855,"Fennimore, Hesper",Marguerite,(754) 497-5719,Bee sting allergy,GT,,53
+6070748133,"Quennell, Kerensa",Ondine,(207) 728-9639,,None,,99
+6077039791,"Kasprowicz, Amarantha",Evadne,(271) 809-9249,,ELL,,79
+6275824760,"Nkemelu-Haverford, Perpetua",Ysolde,(640) 359-7655,,ELL,,41
+6484507836,"Tregarthen, Severin",Severin,(652) 809-5041,Asthma inhaler,None,,55
+6589540446,"Marchetti-Valecourt, Ottilie",Gwenllian,(930) 626-8552,Type 1 diabetes,ELL,,67
+6597311629,"Brightwater, Evadne",Amarantha,(972) 953-5968,Asthma inhaler,SPED,,94
+6616825577,"Achterhof, Ignatia",Lysander,(898) 817-3803,Asthma inhaler,None,,84
+6931438689,"O’Rourkevich, Marguerite",Hesper,(259) 682-1813,,None,,90
+7173533343,"Pennymore, Thorvald",Thorvald,(632) 486-3751,,None,,48
+7433081631,"D’Alessandrova, Casimira",Tamsin,(658) 642-2876,Type 1 diabetes,ELL,,45
+7670339664,"Oyelowo, Lysander",Ignatia,(398) 352-6043,Latex allergy,GT,,91
+7817784798,"Fennimore, Cyprian",Idunn,(878) 897-9534,Asthma inhaler,None,,61
+8108680684,"Quennell, Gwenllian",Ottilie,(457) 532-7085,,ELL,,99
+8222835337,"Kasprowicz, Jessamy",Jessamy,(785) 410-1399,Epilepsy seizure plan,None,,40
+8259064504,"Nkemelu-Haverford, Ysolde",Perpetua,(287) 924-8511,Epilepsy seizure plan,SPED,,71
+8400957376,"Tregarthen, Idunn",Cyprian,(877) 606-1813,,ELL,,45
+8414135684,"Marchetti-Valecourt, Ondine",Kerensa,(842) 336-8647,,SPED,,83
+8422615091,"Brightwater, Tamsin",Casimira,(389) 310-7357,,SPED,,43
+8440344129,"Achterhof, Dashiell",Dashiell,(295) 382-1527,,ELL,,65
+8444987785,"O’Rourkevich, Hesper",Marguerite,(541) 280-5350,,GT,,43
+8492319786,"Pennymore, Kerensa",Ondine,(391) 559-5526,,ELL,,69
+8521016942,"D’Alessandrova, Amarantha",Evadne,(657) 556-4866,Severe peanut allergy,ELL,,42
+8720169233,"Oyelowo, Perpetua",Ysolde,(648) 687-9346,,GT,,52
+8825194912,"Fennimore, Severin",Severin,(468) 222-9890,Latex allergy,None,,79
+8962581556,"Quennell, Ottilie",Gwenllian,(352) 466-4041,Latex allergy,SPED,,72
+9018238799,"Kasprowicz, Evadne",Amarantha,(376) 694-4208,Severe peanut allergy,SPED,,57
+9096521568,"Nkemelu-Haverford, Ignatia",Lysander,(357) 893-4515,,ELL,,81
+9113483243,"Tregarthen, Marguerite",Hesper,(466) 494-9553,Severe peanut allergy,None,,80
+9133465939,"Marchetti-Valecourt, Thorvald",Thorvald,(377) 971-6445,,None,,91
+9219852024,"Brightwater, Casimira",Tamsin,(511) 968-7790,Type 1 diabetes,SPED,,83
+9464033644,"Achterhof, Lysander",Ignatia,(896) 975-9964,,GT,,89
+9579294343,"O’Rourkevich, Cyprian",Idunn,(210) 801-1218,,ELL,,95
+9759999481,"Pennymore, Gwenllian",Ottilie,(465) 676-6490,,GT,,52
+9872243011,"D’Alessandrova, Jessamy",Jessamy,(817) 394-6486,Asthma inhaler,SPED,,52

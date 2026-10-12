@@ -1,0 +1,474 @@
+{
+  "generator": "datanonymous 0.1.0",
+  "synthetic": true,
+  "seed": 1,
+  "files": [
+    {
+      "path": "StudentsPerformance.csv",
+      "format": "csv",
+      "encoding": "utf-8",
+      "bom": false,
+      "compression": null,
+      "delimiter": ",",
+      "line_ending": "CRLF",
+      "quoting": "minimal",
+      "header_row": true,
+      "tables": [
+        {
+          "name": null,
+          "rows": 1000,
+          "readr_col_types": "fffffiii",
+          "columns": [
+            {
+              "name": "gender",
+              "type": "FACTOR",
+              "subtype": null,
+              "r_class": "factor",
+              "readr": "f",
+              "pandas_dtype": "str",
+              "na_tokens": [],
+              "role": "row"
+            },
+            {
+              "name": "race/ethnicity",
+              "type": "FACTOR",
+              "subtype": null,
+              "r_class": "factor",
+              "readr": "f",
+              "pandas_dtype": "str",
+              "na_tokens": [],
+              "role": "row"
+            },
+            {
+              "name": "parental level of education",
+              "type": "ORDINAL",
+              "subtype": "parental_education",
+              "r_class": "ordered factor",
+              "readr": "f",
+              "pandas_dtype": "str",
+              "na_tokens": [],
+              "role": "row",
+              "level_order": [
+                "some high school",
+                "high school",
+                "some college",
+                "associate's degree",
+                "bachelor's degree",
+                "master's degree"
+              ]
+            },
+            {
+              "name": "lunch",
+              "type": "FACTOR",
+              "subtype": null,
+              "r_class": "factor",
+              "readr": "f",
+              "pandas_dtype": "str",
+              "na_tokens": [],
+              "role": "row"
+            },
+            {
+              "name": "test preparation course",
+              "type": "FACTOR",
+              "subtype": null,
+              "r_class": "factor",
+              "readr": "f",
+              "pandas_dtype": "str",
+              "na_tokens": [],
+              "role": "row"
+            },
+            {
+              "name": "math score",
+              "type": "INTEGER",
+              "subtype": "discrete",
+              "r_class": "integer",
+              "readr": "i",
+              "pandas_dtype": "int64",
+              "na_tokens": [],
+              "role": "row"
+            },
+            {
+              "name": "reading score",
+              "type": "INTEGER",
+              "subtype": "discrete",
+              "r_class": "integer",
+              "readr": "i",
+              "pandas_dtype": "int64",
+              "na_tokens": [],
+              "role": "row"
+            },
+            {
+              "name": "writing score",
+              "type": "INTEGER",
+              "subtype": "discrete",
+              "r_class": "integer",
+              "readr": "i",
+              "pandas_dtype": "int64",
+              "na_tokens": [],
+              "role": "row"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "student-scores.csv",
+      "format": "csv",
+      "encoding": "utf-8",
+      "bom": false,
+      "compression": null,
+      "delimiter": ",",
+      "line_ending": "LF",
+      "quoting": "minimal",
+      "header_row": true,
+      "tables": [
+        {
+          "name": null,
+          "rows": 2000,
+          "readr_col_types": "ccccflilifiiiiiii",
+          "columns": [
+            {
+              "name": "id",
+              "type": "IDENTIFIER",
+              "subtype": "sequential",
+              "r_class": "character",
+              "readr": "c",
+              "pandas_dtype": "int64",
+              "na_tokens": [],
+              "role": "id",
+              "shapes": [
+                "9999",
+                "999",
+                "99"
+              ],
+              "row_numbers_kept": true
+            },
+            {
+              "name": "first_name",
+              "type": "PERSON_NAME",
+              "subtype": "first",
+              "r_class": "character",
+              "readr": "c",
+              "pandas_dtype": "str",
+              "na_tokens": [],
+              "role": "row",
+              "name_part": "first",
+              "layout": "single"
+            },
+            {
+              "name": "last_name",
+              "type": "PERSON_NAME",
+              "subtype": "last",
+              "r_class": "character",
+              "readr": "c",
+              "pandas_dtype": "str",
+              "na_tokens": [],
+              "role": "row",
+              "name_part": "last",
+              "layout": "single"
+            },
+            {
+              "name": "email",
+              "type": "EMAIL",
+              "subtype": null,
+              "r_class": "character",
+              "readr": "c",
+              "pandas_dtype": "str",
+              "na_tokens": [],
+              "role": "row",
+              "domains": [
+                "example.org"
+              ]
+            },
+            {
+              "name": "gender",
+              "type": "FACTOR",
+              "subtype": null,
+              "r_class": "factor",
+              "readr": "f",
+              "pandas_dtype": "str",
+              "na_tokens": [],
+              "role": "row"
+            },
+            {
+              "name": "part_time_job",
+              "type": "BOOLEAN",
+              "subtype": null,
+              "r_class": "logical",
+              "readr": "l",
+              "pandas_dtype": "bool",
+              "na_tokens": [],
+              "role": "row",
+              "boolean_tokens": [
+                "False",
+                "True"
+              ]
+            },
+            {
+              "name": "absence_days",
+              "type": "INTEGER",
+              "subtype": "discrete",
+              "r_class": "integer",
+              "readr": "i",
+              "pandas_dtype": "int64",
+              "na_tokens": [],
+              "role": "row"
+            },
+            {
+              "name": "extracurricular_activities",
+              "type": "BOOLEAN",
+              "subtype": null,
+              "r_class": "logical",
+              "readr": "l",
+              "pandas_dtype": "bool",
+              "na_tokens": [],
+              "role": "row",
+              "boolean_tokens": [
+                "False",
+                "True"
+              ]
+            },
+            {
+              "name": "weekly_self_study_hours",
+              "type": "INTEGER",
+              "subtype": "discrete",
+              "r_class": "integer",
+              "readr": "i",
+              "pandas_dtype": "int64",
+              "na_tokens": [],
+              "role": "row"
+            },
+            {
+              "name": "career_aspiration",
+              "type": "FACTOR",
+              "subtype": null,
+              "r_class": "factor",
+              "readr": "f",
+              "pandas_dtype": "str",
+              "na_tokens": [],
+              "role": "row"
+            },
+            {
+              "name": "math_score",
+              "type": "INTEGER",
+              "subtype": "discrete",
+              "r_class": "integer",
+              "readr": "i",
+              "pandas_dtype": "int64",
+              "na_tokens": [],
+              "role": "row"
+            },
+            {
+              "name": "history_score",
+              "type": "INTEGER",
+              "subtype": "discrete",
+              "r_class": "integer",
+              "readr": "i",
+              "pandas_dtype": "int64",
+              "na_tokens": [],
+              "role": "row"
+            },
+            {
+              "name": "physics_score",
+              "type": "INTEGER",
+              "subtype": "discrete",
+              "r_class": "integer",
+              "readr": "i",
+              "pandas_dtype": "int64",
+              "na_tokens": [],
+              "role": "row"
+            },
+            {
+              "name": "chemistry_score",
+              "type": "INTEGER",
+              "subtype": "discrete",
+              "r_class": "integer",
+              "readr": "i",
+              "pandas_dtype": "int64",
+              "na_tokens": [],
+              "role": "row"
+            },
+            {
+              "name": "biology_score",
+              "type": "INTEGER",
+              "subtype": "discrete",
+              "r_class": "integer",
+              "readr": "i",
+              "pandas_dtype": "int64",
+              "na_tokens": [],
+              "role": "row"
+            },
+            {
+              "name": "english_score",
+              "type": "INTEGER",
+              "subtype": "discrete",
+              "r_class": "integer",
+              "readr": "i",
+              "pandas_dtype": "int64",
+              "na_tokens": [],
+              "role": "row"
+            },
+            {
+              "name": "geography_score",
+              "type": "INTEGER",
+              "subtype": "discrete",
+              "r_class": "integer",
+              "readr": "i",
+              "pandas_dtype": "int64",
+              "na_tokens": [],
+              "role": "row"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "path": "students_data.csv",
+      "format": "csv",
+      "encoding": "utf-8",
+      "bom": false,
+      "compression": null,
+      "delimiter": ",",
+      "line_ending": "LF",
+      "quoting": "minimal",
+      "header_row": true,
+      "tables": [
+        {
+          "name": null,
+          "rows": 62,
+          "readr_col_types": "ffiiiiifiif",
+          "columns": [
+            {
+              "name": "YearofStudy",
+              "type": "ORDINAL",
+              "subtype": "year_of_study",
+              "r_class": "ordered factor",
+              "readr": "f",
+              "pandas_dtype": "str",
+              "na_tokens": [],
+              "role": "row",
+              "level_order": [
+                "first year",
+                "second year",
+                "third year",
+                "fourth year"
+              ]
+            },
+            {
+              "name": "Course",
+              "type": "ORG_CODE",
+              "subtype": null,
+              "r_class": "factor",
+              "readr": "f",
+              "pandas_dtype": "str",
+              "na_tokens": [],
+              "role": "row"
+            },
+            {
+              "name": "Age",
+              "type": "INTEGER",
+              "subtype": "discrete",
+              "r_class": "integer",
+              "readr": "i",
+              "pandas_dtype": "int64",
+              "na_tokens": [],
+              "role": "row"
+            },
+            {
+              "name": "ApproxHeight",
+              "type": "INTEGER",
+              "subtype": "discrete",
+              "r_class": "integer",
+              "readr": "i",
+              "pandas_dtype": "int64",
+              "na_tokens": [],
+              "role": "row"
+            },
+            {
+              "name": "ApproxWeight",
+              "type": "INTEGER",
+              "subtype": "discrete",
+              "r_class": "integer",
+              "readr": "i",
+              "pandas_dtype": "int64",
+              "na_tokens": [],
+              "role": "row"
+            },
+            {
+              "name": "KCSE",
+              "type": "INTEGER_YEAR",
+              "subtype": null,
+              "r_class": "integer",
+              "readr": "i",
+              "pandas_dtype": "int64",
+              "na_tokens": [],
+              "role": "row"
+            },
+            {
+              "name": "Yr_JoinCampus",
+              "type": "INTEGER_YEAR",
+              "subtype": null,
+              "r_class": "integer",
+              "readr": "i",
+              "pandas_dtype": "int64",
+              "na_tokens": [],
+              "role": "row"
+            },
+            {
+              "name": "SitKCSE",
+              "type": "FACTOR",
+              "subtype": null,
+              "r_class": "factor",
+              "readr": "f",
+              "pandas_dtype": "str",
+              "na_tokens": [],
+              "role": "row"
+            },
+            {
+              "name": "Expense_Semester",
+              "type": "INTEGER",
+              "subtype": "continuous",
+              "r_class": "integer",
+              "readr": "i",
+              "pandas_dtype": "int64",
+              "na_tokens": [],
+              "role": "row"
+            },
+            {
+              "name": "Expense_Accommodation",
+              "type": "INTEGER",
+              "subtype": "continuous",
+              "r_class": "integer",
+              "readr": "i",
+              "pandas_dtype": "int64",
+              "na_tokens": [],
+              "role": "row"
+            },
+            {
+              "name": "Previous_Exam_MeanGrade",
+              "type": "ORDINAL",
+              "subtype": "letter_grade",
+              "r_class": "ordered factor",
+              "readr": "f",
+              "pandas_dtype": "str",
+              "na_tokens": [],
+              "role": "row",
+              "level_order": [
+                "D",
+                "D+",
+                "C-",
+                "C",
+                "C+",
+                "B-",
+                "B",
+                "B+",
+                "A-",
+                "A"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+# Public source distribution: source, tests with fixtures, and user-facing docs.
+include LICENSE README.md SECURITY.md pyproject.toml MANIFEST.in
+recursive-include src/datanonymous *.py
+recursive-include guides *.md
+include example-data/README.md example-data/generate_examples.py
+include example-data/StudentsPerformance.csv example-data/student-scores.csv example-data/students_data.csv
+include tests/*.py
+recursive-include tests/fixtures *
+
+# Local design notes, run evidence, and generated reports never ship.
+prune docs
+prune .git
+prune .claude
+prune .codex
+prune .agents
+prune .venv
+prune build
+prune dist
+prune tests/_tmp
+prune example-output
+global-exclude AGENTS.md CLAUDE.md .DS_Store Thumbs.db *.py[cod]
+global-exclude __pycache__/*

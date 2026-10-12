@@ -1,0 +1,363 @@
+student_id,course,term,teacher_email,score,note
+002637,BIO,Spring,lorcan.brzezinski@quillfield-isd.org,74,Zephyrine O'Shaughnessy asked to retake the unit test after the absence
+002637,HIST,Spring,lorcan.brzezinski@quillfield-isd.org,90,
+002637,ENG9,Fall,lorcan.brzezinski@quillfield-isd.org,79,
+002637,ART2,Spring,lorcan.brzezinski@quillfield-isd.org,49,Zephyrine O'Shaughnessy asked to retake the unit test after the absence
+003309,ART2,Spring,lorcan.brzezinski@quillfield-isd.org,70,
+003309,ALG1,Fall,lorcan.brzezinski@quillfield-isd.org,80,
+003309,BIO,Spring,lorcan.brzezinski@quillfield-isd.org,71,
+003309,CHEM,Spring,sunniva.ylvisaker@quillfield-isd.org,58,
+003309,CHEM,Fall,sunniva.ylvisaker@quillfield-isd.org,76,Quillon Vanderbilt asked to retake the unit test after the absence
+003861,CHEM,Fall,adaeze.okonkwo-vance@quillfield-isd.org,67,Thaddeus Hollingsworth asked to retake the unit test after the absence
+003861,ALG1,Fall,adaeze.okonkwo-vance@quillfield-isd.org,89,
+003861,CHEM,Spring,adaeze.okonkwo-vance@quillfield-isd.org,59,
+003861,ENG9,Spring,lorcan.brzezinski@quillfield-isd.org,49,Thaddeus Hollingsworth asked to retake the unit test after the absence
+004972,BIO,Fall,sunniva.ylvisaker@quillfield-isd.org,79,
+004972,ART2,Spring,sunniva.ylvisaker@quillfield-isd.org,78,
+004972,CHEM,Fall,sunniva.ylvisaker@quillfield-isd.org,NA,
+004972,ENG9,Fall,lorcan.brzezinski@quillfield-isd.org,NA,
+007724,CHEM,Spring,sunniva.ylvisaker@quillfield-isd.org,60,
+007724,HIST,Spring,lorcan.brzezinski@quillfield-isd.org,95,Leocadia Jablonski asked to retake the unit test after the absence
+008097,CHEM,Spring,adaeze.okonkwo-vance@quillfield-isd.org,48,
+008097,ALG1,Spring,lorcan.brzezinski@quillfield-isd.org,93,
+008388,HIST,Fall,lorcan.brzezinski@quillfield-isd.org,68,
+008388,HIST,Fall,lorcan.brzezinski@quillfield-isd.org,81,
+008388,ENG9,Spring,sunniva.ylvisaker@quillfield-isd.org,86,
+008868,ART2,Spring,lorcan.brzezinski@quillfield-isd.org,78,
+008868,BIO,Fall,sunniva.ylvisaker@quillfield-isd.org,72,
+008868,ALG1,Fall,sunniva.ylvisaker@quillfield-isd.org,45,
+008868,ENG9,Spring,adaeze.okonkwo-vance@quillfield-isd.org,NA,
+008994,ENG9,Fall,lorcan.brzezinski@quillfield-isd.org,59,
+010673,ENG9,Spring,adaeze.okonkwo-vance@quillfield-isd.org,73,Ximena Haverkamp asked to retake the unit test after the absence
+010673,ART2,Spring,adaeze.okonkwo-vance@quillfield-isd.org,55,
+010673,ALG1,Spring,lorcan.brzezinski@quillfield-isd.org,54,Ximena Haverkamp asked to retake the unit test after the absence
+013393,BIO,Spring,adaeze.okonkwo-vance@quillfield-isd.org,92,Bartholomew Pellegrino asked to retake the unit test after the absence
+013393,CHEM,Spring,sunniva.ylvisaker@quillfield-isd.org,98,
+016458,ART2,Fall,lorcan.brzezinski@quillfield-isd.org,87,
+016458,BIO,Spring,sunniva.ylvisaker@quillfield-isd.org,92,
+016458,CHEM,Spring,lorcan.brzezinski@quillfield-isd.org,42,
+017578,CHEM,Spring,sunniva.ylvisaker@quillfield-isd.org,52,
+017578,HIST,Fall,sunniva.ylvisaker@quillfield-isd.org,46,Delphine Castellano asked to retake the unit test after the absence
+017578,ENG9,Fall,adaeze.okonkwo-vance@quillfield-isd.org,77,
+017613,BIO,Fall,adaeze.okonkwo-vance@quillfield-isd.org,53,
+018185,BIO,Fall,sunniva.ylvisaker@quillfield-isd.org,50,
+018185,HIST,Fall,adaeze.okonkwo-vance@quillfield-isd.org,54,
+018185,HIST,Fall,sunniva.ylvisaker@quillfield-isd.org,66,
+018185,ENG9,Fall,sunniva.ylvisaker@quillfield-isd.org,80,
+018185,ALG1,Spring,lorcan.brzezinski@quillfield-isd.org,42,
+019986,ART2,Fall,adaeze.okonkwo-vance@quillfield-isd.org,63,
+019986,BIO,Spring,lorcan.brzezinski@quillfield-isd.org,64,Jolyon Nyberg asked to retake the unit test after the absence
+020068,CHEM,Fall,lorcan.brzezinski@quillfield-isd.org,55,
+020068,HIST,Spring,sunniva.ylvisaker@quillfield-isd.org,43,
+020068,ENG9,Fall,lorcan.brzezinski@quillfield-isd.org,51,
+020415,ENG9,Fall,sunniva.ylvisaker@quillfield-isd.org,47,
+020415,HIST,Spring,lorcan.brzezinski@quillfield-isd.org,93,
+020415,HIST,Fall,lorcan.brzezinski@quillfield-isd.org,98,
+020415,BIO,Fall,lorcan.brzezinski@quillfield-isd.org,40,
+021327,CHEM,Spring,adaeze.okonkwo-vance@quillfield-isd.org,89,Marisol Ishikawa asked to retake the unit test after the absence
+021327,BIO,Fall,sunniva.ylvisaker@quillfield-isd.org,100,
+022368,HIST,Fall,adaeze.okonkwo-vance@quillfield-isd.org,83,Nerys Delacroix asked to retake the unit test after the absence
+022368,ENG9,Fall,sunniva.ylvisaker@quillfield-isd.org,64,
+022368,CHEM,Spring,lorcan.brzezinski@quillfield-isd.org,NA,
+023886,ART2,Fall,sunniva.ylvisaker@quillfield-isd.org,88,
+023886,ALG1,Spring,adaeze.okonkwo-vance@quillfield-isd.org,78,
+023886,ALG1,Spring,adaeze.okonkwo-vance@quillfield-isd.org,66,
+023886,ART2,Fall,lorcan.brzezinski@quillfield-isd.org,55,Octavian Kittredge asked to retake the unit test after the absence
+023886,BIO,Fall,sunniva.ylvisaker@quillfield-isd.org,89,Octavian Kittredge asked to retake the unit test after the absence
+024505,ALG1,Spring,sunniva.ylvisaker@quillfield-isd.org,75,
+024505,BIO,Fall,adaeze.okonkwo-vance@quillfield-isd.org,87,Philippa Okonkwo-Vance asked to retake the unit test after the absence
+024505,ENG9,Spring,sunniva.ylvisaker@quillfield-isd.org,87,
+024505,ART2,Spring,lorcan.brzezinski@quillfield-isd.org,68,Philippa Okonkwo-Vance asked to retake the unit test after the absence
+025572,BIO,Spring,adaeze.okonkwo-vance@quillfield-isd.org,100,
+025572,HIST,Fall,lorcan.brzezinski@quillfield-isd.org,83,
+025572,ALG1,Spring,sunniva.ylvisaker@quillfield-isd.org,88,
+025855,ENG9,Fall,lorcan.brzezinski@quillfield-isd.org,87,Seraphina Fitzwilliam asked to retake the unit test after the absence
+025855,HIST,Fall,sunniva.ylvisaker@quillfield-isd.org,57,
+025855,HIST,Fall,adaeze.okonkwo-vance@quillfield-isd.org,59,
+025855,CHEM,Spring,lorcan.brzezinski@quillfield-isd.org,NA,
+025855,ART2,Spring,sunniva.ylvisaker@quillfield-isd.org,94,
+025997,BIO,Spring,lorcan.brzezinski@quillfield-isd.org,43,
+025997,HIST,Spring,lorcan.brzezinski@quillfield-isd.org,NA,
+025997,ART2,Fall,lorcan.brzezinski@quillfield-isd.org,78,
+025997,CHEM,Fall,adaeze.okonkwo-vance@quillfield-isd.org,48,
+025997,ALG1,Spring,adaeze.okonkwo-vance@quillfield-isd.org,40,
+027852,ART2,Fall,sunniva.ylvisaker@quillfield-isd.org,83,Ulrika Iwasaki asked to retake the unit test after the absence
+027852,BIO,Fall,lorcan.brzezinski@quillfield-isd.org,47,
+027852,ENG9,Spring,sunniva.ylvisaker@quillfield-isd.org,41,
+027852,ART2,Spring,adaeze.okonkwo-vance@quillfield-isd.org,79,
+028284,HIST,Fall,lorcan.brzezinski@quillfield-isd.org,47,
+028431,ENG9,Spring,lorcan.brzezinski@quillfield-isd.org,53,Wilhelmina Kowalczyk asked to retake the unit test after the absence
+028431,ART2,Fall,adaeze.okonkwo-vance@quillfield-isd.org,62,
+029063,ART2,Fall,adaeze.okonkwo-vance@quillfield-isd.org,55,Yevgenia Duquesne asked to retake the unit test after the absence
+029063,ALG1,Spring,lorcan.brzezinski@quillfield-isd.org,40,
+029560,HIST,Fall,sunniva.ylvisaker@quillfield-isd.org,72,
+029560,ALG1,Fall,adaeze.okonkwo-vance@quillfield-isd.org,100,
+029844,ALG1,Spring,sunniva.ylvisaker@quillfield-isd.org,41,
+029844,BIO,Fall,lorcan.brzezinski@quillfield-isd.org,63,
+031007,ENG9,Spring,sunniva.ylvisaker@quillfield-isd.org,97,
+031007,ART2,Spring,adaeze.okonkwo-vance@quillfield-isd.org,83,
+031007,ALG1,Fall,adaeze.okonkwo-vance@quillfield-isd.org,73,Bertrand Oyelaran asked to retake the unit test after the absence
+033465,CHEM,Spring,sunniva.ylvisaker@quillfield-isd.org,84,Cressida Thibodeaux asked to retake the unit test after the absence
+033465,CHEM,Fall,lorcan.brzezinski@quillfield-isd.org,81,Cressida Thibodeaux asked to retake the unit test after the absence
+033629,ART2,Fall,adaeze.okonkwo-vance@quillfield-isd.org,68,Dagny Abernathy asked to retake the unit test after the absence
+033629,BIO,Fall,sunniva.ylvisaker@quillfield-isd.org,58,
+034341,ALG1,Spring,sunniva.ylvisaker@quillfield-isd.org,49,
+035212,ART2,Fall,sunniva.ylvisaker@quillfield-isd.org,71,Florian Etxeberria asked to retake the unit test after the absence
+035212,BIO,Fall,lorcan.brzezinski@quillfield-isd.org,74,Florian Etxeberria asked to retake the unit test after the absence
+035212,ALG1,Fall,sunniva.ylvisaker@quillfield-isd.org,53,Florian Etxeberria asked to retake the unit test after the absence
+035212,BIO,Spring,adaeze.okonkwo-vance@quillfield-isd.org,71,
+036017,HIST,Spring,sunniva.ylvisaker@quillfield-isd.org,48,
+036017,BIO,Fall,lorcan.brzezinski@quillfield-isd.org,NA,
+036017,ALG1,Fall,sunniva.ylvisaker@quillfield-isd.org,68,Griselda Lafontaine asked to retake the unit test after the absence
+036017,BIO,Spring,sunniva.ylvisaker@quillfield-isd.org,74,Griselda Lafontaine asked to retake the unit test after the absence
+036017,ENG9,Fall,sunniva.ylvisaker@quillfield-isd.org,51,
+036969,ALG1,Fall,lorcan.brzezinski@quillfield-isd.org,75,
+037540,ENG9,Spring,adaeze.okonkwo-vance@quillfield-isd.org,98,
+037540,ALG1,Fall,adaeze.okonkwo-vance@quillfield-isd.org,49,
+037540,CHEM,Fall,adaeze.okonkwo-vance@quillfield-isd.org,53,
+037540,BIO,Spring,lorcan.brzezinski@quillfield-isd.org,82,
+037800,HIST,Spring,sunniva.ylvisaker@quillfield-isd.org,NA,
+037800,BIO,Fall,adaeze.okonkwo-vance@quillfield-isd.org,59,
+037800,ENG9,Spring,adaeze.okonkwo-vance@quillfield-isd.org,88,Zephyrine Hollingsworth asked to retake the unit test after the absence
+037800,ART2,Spring,adaeze.okonkwo-vance@quillfield-isd.org,42,
+039047,BIO,Spring,adaeze.okonkwo-vance@quillfield-isd.org,55,Quillon Cavendish asked to retake the unit test after the absence
+039047,CHEM,Spring,sunniva.ylvisaker@quillfield-isd.org,75,
+039047,ENG9,Spring,lorcan.brzezinski@quillfield-isd.org,NA,
+039089,ENG9,Fall,adaeze.okonkwo-vance@quillfield-isd.org,68,
+039398,CHEM,Fall,sunniva.ylvisaker@quillfield-isd.org,55,
+039398,ART2,Fall,adaeze.okonkwo-vance@quillfield-isd.org,70,
+039398,BIO,Spring,sunniva.ylvisaker@quillfield-isd.org,NA,
+039747,HIST,Spring,sunniva.ylvisaker@quillfield-isd.org,88,
+039747,CHEM,Spring,adaeze.okonkwo-vance@quillfield-isd.org,44,
+039747,ALG1,Spring,adaeze.okonkwo-vance@quillfield-isd.org,53,Leocadia Lindqvist asked to retake the unit test after the absence
+040439,ENG9,Spring,adaeze.okonkwo-vance@quillfield-isd.org,41,
+040439,ENG9,Fall,sunniva.ylvisaker@quillfield-isd.org,95,
+040439,CHEM,Spring,lorcan.brzezinski@quillfield-isd.org,NA,
+040439,CHEM,Fall,lorcan.brzezinski@quillfield-isd.org,65,
+040685,BIO,Spring,adaeze.okonkwo-vance@quillfield-isd.org,49,
+040685,HIST,Fall,sunniva.ylvisaker@quillfield-isd.org,92,Fenella Achterberg asked to retake the unit test after the absence
+040685,HIST,Spring,sunniva.ylvisaker@quillfield-isd.org,79,
+040685,BIO,Fall,adaeze.okonkwo-vance@quillfield-isd.org,61,Fenella Achterberg asked to retake the unit test after the absence
+040685,ALG1,Spring,adaeze.okonkwo-vance@quillfield-isd.org,41,
+041180,ART2,Fall,adaeze.okonkwo-vance@quillfield-isd.org,80,
+041180,BIO,Fall,sunniva.ylvisaker@quillfield-isd.org,62,Ignatius Haverkamp asked to retake the unit test after the absence
+041180,HIST,Spring,sunniva.ylvisaker@quillfield-isd.org,79,
+041180,HIST,Fall,sunniva.ylvisaker@quillfield-isd.org,83,Ignatius Haverkamp asked to retake the unit test after the absence
+041180,BIO,Fall,sunniva.ylvisaker@quillfield-isd.org,44,
+042293,ENG9,Fall,lorcan.brzezinski@quillfield-isd.org,70,Persephone Pellegrino asked to retake the unit test after the absence
+042293,CHEM,Spring,lorcan.brzezinski@quillfield-isd.org,81,Persephone Pellegrino asked to retake the unit test after the absence
+042606,HIST,Fall,lorcan.brzezinski@quillfield-isd.org,46,
+042606,ART2,Fall,sunniva.ylvisaker@quillfield-isd.org,51,
+042606,ALG1,Fall,lorcan.brzezinski@quillfield-isd.org,76,
+042606,CHEM,Spring,adaeze.okonkwo-vance@quillfield-isd.org,47,
+043953,HIST,Spring,lorcan.brzezinski@quillfield-isd.org,69,
+043953,ART2,Fall,adaeze.okonkwo-vance@quillfield-isd.org,94,
+043953,ENG9,Spring,sunniva.ylvisaker@quillfield-isd.org,41,
+043953,CHEM,Spring,adaeze.okonkwo-vance@quillfield-isd.org,76,
+043953,CHEM,Fall,sunniva.ylvisaker@quillfield-isd.org,80,
+044716,ALG1,Fall,lorcan.brzezinski@quillfield-isd.org,80,
+044716,BIO,Fall,sunniva.ylvisaker@quillfield-isd.org,NA,
+044785,CHEM,Fall,lorcan.brzezinski@quillfield-isd.org,83,
+044785,ENG9,Fall,sunniva.ylvisaker@quillfield-isd.org,54,
+044785,ART2,Fall,sunniva.ylvisaker@quillfield-isd.org,58,Delphine Fairweather asked to retake the unit test after the absence
+045630,BIO,Spring,adaeze.okonkwo-vance@quillfield-isd.org,59,Horatio Nyberg asked to retake the unit test after the absence
+045630,ALG1,Spring,sunniva.ylvisaker@quillfield-isd.org,NA,
+047714,ALG1,Spring,lorcan.brzezinski@quillfield-isd.org,100,
+047714,BIO,Spring,adaeze.okonkwo-vance@quillfield-isd.org,88,
+047714,ALG1,Spring,lorcan.brzezinski@quillfield-isd.org,98,Isolde Quackenbush asked to retake the unit test after the absence
+047714,ART2,Spring,sunniva.ylvisaker@quillfield-isd.org,76,Isolde Quackenbush asked to retake the unit test after the absence
+047714,BIO,Spring,sunniva.ylvisaker@quillfield-isd.org,61,
+048116,ALG1,Spring,sunniva.ylvisaker@quillfield-isd.org,88,Jolyon Nakashima-Ruiz asked to retake the unit test after the absence
+048116,CHEM,Spring,adaeze.okonkwo-vance@quillfield-isd.org,41,
+048116,CHEM,Fall,lorcan.brzezinski@quillfield-isd.org,50,
+048116,BIO,Spring,adaeze.okonkwo-vance@quillfield-isd.org,NA,Jolyon Nakashima-Ruiz asked to retake the unit test after the absence
+048116,ART2,Fall,adaeze.okonkwo-vance@quillfield-isd.org,86,
+049352,ENG9,Fall,adaeze.okonkwo-vance@quillfield-isd.org,70,
+049352,BIO,Spring,adaeze.okonkwo-vance@quillfield-isd.org,61,Kasimir Ishikawa asked to retake the unit test after the absence
+049352,ART2,Spring,sunniva.ylvisaker@quillfield-isd.org,77,
+049352,BIO,Fall,adaeze.okonkwo-vance@quillfield-isd.org,66,
+049352,ENG9,Fall,sunniva.ylvisaker@quillfield-isd.org,67,
+049412,ALG1,Fall,sunniva.ylvisaker@quillfield-isd.org,79,
+050109,BIO,Spring,lorcan.brzezinski@quillfield-isd.org,57,Marisol Kittredge asked to retake the unit test after the absence
+050109,BIO,Spring,lorcan.brzezinski@quillfield-isd.org,81,
+051689,ENG9,Fall,sunniva.ylvisaker@quillfield-isd.org,89,
+051689,HIST,Fall,lorcan.brzezinski@quillfield-isd.org,96,
+051689,BIO,Fall,adaeze.okonkwo-vance@quillfield-isd.org,45,
+051689,HIST,Spring,sunniva.ylvisaker@quillfield-isd.org,76,
+052491,HIST,Spring,sunniva.ylvisaker@quillfield-isd.org,78,Octavian Petrakis asked to retake the unit test after the absence
+052580,BIO,Spring,sunniva.ylvisaker@quillfield-isd.org,76,
+052700,ALG1,Spring,adaeze.okonkwo-vance@quillfield-isd.org,78,
+052700,CHEM,Spring,adaeze.okonkwo-vance@quillfield-isd.org,68,
+052700,BIO,Spring,lorcan.brzezinski@quillfield-isd.org,67,
+053109,BIO,Spring,adaeze.okonkwo-vance@quillfield-isd.org,62,
+053109,ALG1,Fall,sunniva.ylvisaker@quillfield-isd.org,57,
+053109,CHEM,Fall,sunniva.ylvisaker@quillfield-isd.org,65,Seraphina Iwasaki asked to retake the unit test after the absence
+053479,ART2,Spring,lorcan.brzezinski@quillfield-isd.org,42,
+053479,CHEM,Spring,lorcan.brzezinski@quillfield-isd.org,61,
+053479,ALG1,Fall,lorcan.brzezinski@quillfield-isd.org,47,
+053479,ART2,Fall,lorcan.brzezinski@quillfield-isd.org,71,
+056156,ENG9,Fall,sunniva.ylvisaker@quillfield-isd.org,98,Ulrika Kowalczyk asked to retake the unit test after the absence
+056156,ENG9,Fall,lorcan.brzezinski@quillfield-isd.org,45,
+056156,ART2,Fall,sunniva.ylvisaker@quillfield-isd.org,96,
+056156,ART2,Spring,lorcan.brzezinski@quillfield-isd.org,54,
+056752,HIST,Spring,lorcan.brzezinski@quillfield-isd.org,50,
+056752,CHEM,Spring,adaeze.okonkwo-vance@quillfield-isd.org,78,
+056752,ALG1,Fall,lorcan.brzezinski@quillfield-isd.org,55,Valentijn Duquesne asked to retake the unit test after the absence
+057025,CHEM,Fall,adaeze.okonkwo-vance@quillfield-isd.org,67,
+057025,CHEM,Spring,sunniva.ylvisaker@quillfield-isd.org,46,Wilhelmina Zielinski asked to retake the unit test after the absence
+057025,ALG1,Fall,sunniva.ylvisaker@quillfield-isd.org,81,
+057347,ALG1,Spring,lorcan.brzezinski@quillfield-isd.org,48,
+057347,CHEM,Spring,sunniva.ylvisaker@quillfield-isd.org,91,
+057347,HIST,Spring,adaeze.okonkwo-vance@quillfield-isd.org,96,
+057347,BIO,Spring,sunniva.ylvisaker@quillfield-isd.org,95,Yevgenia Gallardo asked to retake the unit test after the absence
+057347,ENG9,Spring,sunniva.ylvisaker@quillfield-isd.org,70,
+057415,ENG9,Fall,sunniva.ylvisaker@quillfield-isd.org,66,
+057415,CHEM,Fall,lorcan.brzezinski@quillfield-isd.org,48,
+057415,HIST,Fall,adaeze.okonkwo-vance@quillfield-isd.org,65,
+057415,ENG9,Spring,adaeze.okonkwo-vance@quillfield-isd.org,77,Zoë Oyelaran asked to retake the unit test after the absence
+057415,HIST,Fall,lorcan.brzezinski@quillfield-isd.org,85,
+059078,HIST,Spring,sunniva.ylvisaker@quillfield-isd.org,81,
+059078,BIO,Fall,lorcan.brzezinski@quillfield-isd.org,49,
+059287,ALG1,Spring,sunniva.ylvisaker@quillfield-isd.org,50,Bertrand Abernathy asked to retake the unit test after the absence
+059287,CHEM,Spring,lorcan.brzezinski@quillfield-isd.org,76,Bertrand Abernathy asked to retake the unit test after the absence
+059287,ART2,Spring,adaeze.okonkwo-vance@quillfield-isd.org,93,
+061593,HIST,Fall,lorcan.brzezinski@quillfield-isd.org,90,
+061593,ART2,Spring,sunniva.ylvisaker@quillfield-isd.org,83,Cressida Jankowski asked to retake the unit test after the absence
+061593,ENG9,Fall,sunniva.ylvisaker@quillfield-isd.org,94,
+062556,CHEM,Spring,lorcan.brzezinski@quillfield-isd.org,43,
+062556,ALG1,Fall,sunniva.ylvisaker@quillfield-isd.org,45,
+062556,ENG9,Fall,sunniva.ylvisaker@quillfield-isd.org,74,
+063391,ENG9,Spring,sunniva.ylvisaker@quillfield-isd.org,62,Eilidh Lafontaine asked to retake the unit test after the absence
+063391,BIO,Spring,adaeze.okonkwo-vance@quillfield-isd.org,68,
+063391,CHEM,Fall,adaeze.okonkwo-vance@quillfield-isd.org,50,
+063391,CHEM,Spring,adaeze.okonkwo-vance@quillfield-isd.org,95,
+066674,ART2,Fall,lorcan.brzezinski@quillfield-isd.org,90,Florian O'Shaughnessy asked to retake the unit test after the absence
+067309,ART2,Fall,lorcan.brzezinski@quillfield-isd.org,92,
+067309,BIO,Spring,adaeze.okonkwo-vance@quillfield-isd.org,97,
+067309,CHEM,Spring,adaeze.okonkwo-vance@quillfield-isd.org,61,
+067309,HIST,Fall,adaeze.okonkwo-vance@quillfield-isd.org,59,
+067309,HIST,Spring,adaeze.okonkwo-vance@quillfield-isd.org,53,
+068208,HIST,Spring,adaeze.okonkwo-vance@quillfield-isd.org,59,
+068208,ALG1,Spring,lorcan.brzezinski@quillfield-isd.org,68,
+068275,CHEM,Spring,lorcan.brzezinski@quillfield-isd.org,76,
+068514,HIST,Spring,adaeze.okonkwo-vance@quillfield-isd.org,47,Zephyrine Jablonski asked to retake the unit test after the absence
+068514,BIO,Spring,sunniva.ylvisaker@quillfield-isd.org,61,
+068514,BIO,Spring,lorcan.brzezinski@quillfield-isd.org,56,
+069570,ALG1,Fall,sunniva.ylvisaker@quillfield-isd.org,69,
+069570,HIST,Fall,adaeze.okonkwo-vance@quillfield-isd.org,77,
+069570,BIO,Fall,adaeze.okonkwo-vance@quillfield-isd.org,87,
+070101,HIST,Spring,lorcan.brzezinski@quillfield-isd.org,91,Thaddeus Lindqvist asked to retake the unit test after the absence
+070101,ALG1,Spring,sunniva.ylvisaker@quillfield-isd.org,50,
+070101,CHEM,Fall,adaeze.okonkwo-vance@quillfield-isd.org,94,
+070248,ENG9,Spring,sunniva.ylvisaker@quillfield-isd.org,46,
+071845,HIST,Spring,adaeze.okonkwo-vance@quillfield-isd.org,NA,
+072224,HIST,Spring,sunniva.ylvisaker@quillfield-isd.org,92,
+072224,ENG9,Spring,lorcan.brzezinski@quillfield-isd.org,NA,
+072224,ART2,Spring,lorcan.brzezinski@quillfield-isd.org,86,
+073515,CHEM,Fall,adaeze.okonkwo-vance@quillfield-isd.org,58,
+073515,HIST,Fall,adaeze.okonkwo-vance@quillfield-isd.org,NA,
+073521,HIST,Spring,sunniva.ylvisaker@quillfield-isd.org,85,
+073521,ALG1,Spring,sunniva.ylvisaker@quillfield-isd.org,43,
+073521,CHEM,Fall,adaeze.okonkwo-vance@quillfield-isd.org,42,
+073521,ALG1,Spring,lorcan.brzezinski@quillfield-isd.org,91,Ignatius Szymanski asked to retake the unit test after the absence
+074995,HIST,Spring,adaeze.okonkwo-vance@quillfield-isd.org,49,
+074995,ALG1,Fall,adaeze.okonkwo-vance@quillfield-isd.org,99,Persephone Castellano asked to retake the unit test after the absence
+074995,ENG9,Fall,lorcan.brzezinski@quillfield-isd.org,41,Persephone Castellano asked to retake the unit test after the absence
+074995,CHEM,Spring,sunniva.ylvisaker@quillfield-isd.org,93,Persephone Castellano asked to retake the unit test after the absence
+075734,BIO,Fall,sunniva.ylvisaker@quillfield-isd.org,59,
+075734,ENG9,Spring,sunniva.ylvisaker@quillfield-isd.org,69,
+075734,ENG9,Fall,lorcan.brzezinski@quillfield-isd.org,50,
+076597,HIST,Fall,lorcan.brzezinski@quillfield-isd.org,94,Bartholomew Fairweather asked to retake the unit test after the absence
+076597,CHEM,Fall,lorcan.brzezinski@quillfield-isd.org,NA,
+076597,HIST,Fall,adaeze.okonkwo-vance@quillfield-isd.org,89,
+077397,ART2,Spring,lorcan.brzezinski@quillfield-isd.org,96,Cosimo Nyberg asked to retake the unit test after the absence
+077397,BIO,Fall,lorcan.brzezinski@quillfield-isd.org,85,
+078490,ENG9,Fall,sunniva.ylvisaker@quillfield-isd.org,42,
+078490,CHEM,Fall,sunniva.ylvisaker@quillfield-isd.org,84,Delphine Quackenbush asked to retake the unit test after the absence
+078490,HIST,Fall,sunniva.ylvisaker@quillfield-isd.org,79,Delphine Quackenbush asked to retake the unit test after the absence
+078490,ENG9,Spring,lorcan.brzezinski@quillfield-isd.org,80,Delphine Quackenbush asked to retake the unit test after the absence
+078806,HIST,Spring,lorcan.brzezinski@quillfield-isd.org,77,
+078806,CHEM,Spring,lorcan.brzezinski@quillfield-isd.org,65,Horatio Nakashima-Ruiz asked to retake the unit test after the absence
+078806,HIST,Fall,sunniva.ylvisaker@quillfield-isd.org,93,
+079098,ENG9,Fall,lorcan.brzezinski@quillfield-isd.org,93,Isolde Ishikawa asked to retake the unit test after the absence
+079241,ALG1,Spring,sunniva.ylvisaker@quillfield-isd.org,99,Jolyon Delacroix asked to retake the unit test after the absence
+079241,ENG9,Fall,lorcan.brzezinski@quillfield-isd.org,63,
+079446,CHEM,Spring,sunniva.ylvisaker@quillfield-isd.org,76,
+080845,ALG1,Spring,adaeze.okonkwo-vance@quillfield-isd.org,73,
+081024,ALG1,Fall,lorcan.brzezinski@quillfield-isd.org,65,
+081024,BIO,Spring,sunniva.ylvisaker@quillfield-isd.org,70,Marisol Petrakis asked to retake the unit test after the absence
+081024,ALG1,Fall,adaeze.okonkwo-vance@quillfield-isd.org,89,
+081456,CHEM,Fall,lorcan.brzezinski@quillfield-isd.org,NA,
+081456,ENG9,Spring,lorcan.brzezinski@quillfield-isd.org,49,
+081456,ART2,Fall,adaeze.okonkwo-vance@quillfield-isd.org,78,
+081456,ART2,Spring,sunniva.ylvisaker@quillfield-isd.org,87,Nerys Fitzwilliam asked to retake the unit test after the absence
+081456,ALG1,Fall,adaeze.okonkwo-vance@quillfield-isd.org,76,
+082278,CHEM,Fall,sunniva.ylvisaker@quillfield-isd.org,52,
+082278,CHEM,Spring,lorcan.brzezinski@quillfield-isd.org,77,
+082278,ALG1,Fall,lorcan.brzezinski@quillfield-isd.org,60,
+082278,BIO,Spring,sunniva.ylvisaker@quillfield-isd.org,96,Octavian Bjornstad asked to retake the unit test after the absence
+083772,CHEM,Fall,sunniva.ylvisaker@quillfield-isd.org,88,
+083772,ART2,Fall,lorcan.brzezinski@quillfield-isd.org,95,
+085062,ENG9,Fall,sunniva.ylvisaker@quillfield-isd.org,40,
+085062,CHEM,Spring,sunniva.ylvisaker@quillfield-isd.org,80,
+085062,ART2,Fall,sunniva.ylvisaker@quillfield-isd.org,93,
+085062,HIST,Fall,adaeze.okonkwo-vance@quillfield-isd.org,41,
+085195,HIST,Spring,lorcan.brzezinski@quillfield-isd.org,84,Seraphina Kowalczyk asked to retake the unit test after the absence
+085195,BIO,Fall,sunniva.ylvisaker@quillfield-isd.org,68,
+085195,ALG1,Fall,sunniva.ylvisaker@quillfield-isd.org,56,Seraphina Kowalczyk asked to retake the unit test after the absence
+085195,BIO,Spring,adaeze.okonkwo-vance@quillfield-isd.org,92,
+086811,ENG9,Spring,lorcan.brzezinski@quillfield-isd.org,72,
+087385,ALG1,Fall,sunniva.ylvisaker@quillfield-isd.org,72,
+087385,HIST,Fall,sunniva.ylvisaker@quillfield-isd.org,99,Ulrika Zielinski asked to retake the unit test after the absence
+087385,CHEM,Fall,adaeze.okonkwo-vance@quillfield-isd.org,NA,
+087385,HIST,Spring,adaeze.okonkwo-vance@quillfield-isd.org,49,
+089004,CHEM,Spring,sunniva.ylvisaker@quillfield-isd.org,78,
+089740,HIST,Spring,adaeze.okonkwo-vance@quillfield-isd.org,52,
+089740,ALG1,Fall,adaeze.okonkwo-vance@quillfield-isd.org,100,Wilhelmina Oyelaran asked to retake the unit test after the absence
+089740,ENG9,Spring,lorcan.brzezinski@quillfield-isd.org,65,
+091632,ENG9,Spring,adaeze.okonkwo-vance@quillfield-isd.org,52,Yevgenia Thibodeaux asked to retake the unit test after the absence
+091632,BIO,Fall,sunniva.ylvisaker@quillfield-isd.org,58,
+091905,ART2,Spring,sunniva.ylvisaker@quillfield-isd.org,40,
+091905,BIO,Spring,adaeze.okonkwo-vance@quillfield-isd.org,82,
+091905,CHEM,Spring,sunniva.ylvisaker@quillfield-isd.org,75,
+091905,ENG9,Spring,lorcan.brzezinski@quillfield-isd.org,71,
+091905,CHEM,Spring,adaeze.okonkwo-vance@quillfield-isd.org,62,
+092048,ART2,Spring,lorcan.brzezinski@quillfield-isd.org,70,Anouk Jankowski asked to retake the unit test after the absence
+092048,CHEM,Spring,sunniva.ylvisaker@quillfield-isd.org,68,Anouk Jankowski asked to retake the unit test after the absence
+092051,ART2,Fall,adaeze.okonkwo-vance@quillfield-isd.org,91,Bertrand Etxeberria asked to retake the unit test after the absence
+092456,BIO,Spring,sunniva.ylvisaker@quillfield-isd.org,43,Cressida Lafontaine asked to retake the unit test after the absence
+092456,ART2,Fall,adaeze.okonkwo-vance@quillfield-isd.org,92,
+092456,HIST,Fall,sunniva.ylvisaker@quillfield-isd.org,68,Cressida Lafontaine asked to retake the unit test after the absence
+092456,ART2,Spring,lorcan.brzezinski@quillfield-isd.org,72,
+092456,ALG1,Spring,adaeze.okonkwo-vance@quillfield-isd.org,76,Cressida Lafontaine asked to retake the unit test after the absence
+093495,ART2,Spring,adaeze.okonkwo-vance@quillfield-isd.org,51,
+093495,HIST,Spring,lorcan.brzezinski@quillfield-isd.org,99,
+093495,ALG1,Spring,sunniva.ylvisaker@quillfield-isd.org,79,
+093495,ART2,Spring,adaeze.okonkwo-vance@quillfield-isd.org,70,Dagny O'Shaughnessy asked to retake the unit test after the absence
+094074,ALG1,Spring,sunniva.ylvisaker@quillfield-isd.org,77,
+094074,ALG1,Fall,adaeze.okonkwo-vance@quillfield-isd.org,86,Eilidh Vanderbilt asked to retake the unit test after the absence
+094074,HIST,Spring,adaeze.okonkwo-vance@quillfield-isd.org,89,
+094074,CHEM,Spring,sunniva.ylvisaker@quillfield-isd.org,67,Eilidh Vanderbilt asked to retake the unit test after the absence
+094226,ART2,Fall,sunniva.ylvisaker@quillfield-isd.org,97,
+094226,BIO,Spring,adaeze.okonkwo-vance@quillfield-isd.org,53,
+094379,ENG9,Spring,lorcan.brzezinski@quillfield-isd.org,73,
+094379,BIO,Fall,sunniva.ylvisaker@quillfield-isd.org,79,
+094379,ENG9,Spring,adaeze.okonkwo-vance@quillfield-isd.org,46,Griselda Cavendish asked to retake the unit test after the absence
+094379,ALG1,Fall,lorcan.brzezinski@quillfield-isd.org,77,
+096295,ENG9,Fall,lorcan.brzezinski@quillfield-isd.org,76,
+096921,BIO,Fall,sunniva.ylvisaker@quillfield-isd.org,77,Ingeborg Brzezinski asked to retake the unit test after the absence
+096921,ART2,Spring,adaeze.okonkwo-vance@quillfield-isd.org,99,
+096921,ALG1,Spring,adaeze.okonkwo-vance@quillfield-isd.org,87,Ingeborg Brzezinski asked to retake the unit test after the absence
+096921,BIO,Fall,lorcan.brzezinski@quillfield-isd.org,44,
+096921,ENG9,Fall,lorcan.brzezinski@quillfield-isd.org,87,
+098420,ALG1,Fall,sunniva.ylvisaker@quillfield-isd.org,67,Zephyrine Lindqvist asked to retake the unit test after the absence
+098420,ART2,Spring,sunniva.ylvisaker@quillfield-isd.org,41,Zephyrine Lindqvist asked to retake the unit test after the absence
+098420,BIO,Spring,sunniva.ylvisaker@quillfield-isd.org,58,
+099286,ENG9,Fall,lorcan.brzezinski@quillfield-isd.org,77,
+099286,ART2,Spring,sunniva.ylvisaker@quillfield-isd.org,66,
+099286,HIST,Fall,adaeze.okonkwo-vance@quillfield-isd.org,100,
+099286,ART2,Fall,lorcan.brzezinski@quillfield-isd.org,44,
+099286,ENG9,Fall,sunniva.ylvisaker@quillfield-isd.org,NA,
+099903,CHEM,Fall,lorcan.brzezinski@quillfield-isd.org,44,
+099903,ENG9,Fall,lorcan.brzezinski@quillfield-isd.org,69,
+099903,ENG9,Spring,sunniva.ylvisaker@quillfield-isd.org,55,Thaddeus Achterberg asked to retake the unit test after the absence

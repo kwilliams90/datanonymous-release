@@ -1,0 +1,17 @@
+# Data files are test subjects: line endings, encodings and BOMs must stay byte-exact.
+example-data/** -text
+example-output/** -text
+tests/fixtures/** -text
+*.csv -text
+*.tsv -text
+*.psv -text
+*.jsonl -text
+*.parquet binary
+*.feather binary
+*.xlsx binary
+*.xls binary
+*.dta binary
+*.sas7bdat binary
+*.xpt binary
+*.gz binary
+*.zip binary

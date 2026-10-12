@@ -1,0 +1,49 @@
+<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel">
+<head>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<meta name="author" content="jsmith">
+<title>Roster export for jsmith</title>
+<style>
+td { mso-number-format:"\@"; }
+.num { mso-number-format:"0.00"; }
+@page { mso-header-data:"&LPrinted by jsmith"; }
+</style>
+<!-- exported by SIS for user jsmith from 10.1.2.3 -->
+</head>
+<body>
+<table border="1">
+<tr><td colspan="5">Roster Report - Printed 10/01/2024</td></tr>
+<tr><th>Student_Number</th><th>LastFirst</th><th>Grade_Level</th><th>Entry_Date</th><th>GPA</th></tr>
+<tr><td style="mso-number-format:'\@'">004100</td><td>Abernathy, Ada</td><td>11</td><td>06/16/2024</td><td class="num" x:num="2.10">2.10</td></tr>
+<tr><td style="mso-number-format:'\@'">004113</td><td>Brightwater, Bram</td><td>9</td><td>05/25/2024</td><td class="num" x:num="3.88">3.88</td></tr>
+<tr><td style="mso-number-format:'\@'">004126</td><td>Castellano, Cleo</td><td>10</td><td>03/27/2024</td><td class="num" x:num="3.08">3.08</td></tr>
+<tr><td style="mso-number-format:'\@'">004139</td><td>Delacroix, Dov</td><td>9</td><td>05/10/2024</td><td class="num" x:num="3.59">3.59</td></tr>
+<tr><td style="mso-number-format:'\@'">004152</td><td>Eastwood, Esme</td><td>12</td><td>03/16/2024</td><td class="num" x:num="2.77">2.77</td></tr>
+<tr><td style="mso-number-format:'\@'">004165</td><td>Fairbanks, Finn</td><td>12</td><td>03/20/2024</td><td class="num" x:num="2.30">2.30</td></tr>
+<tr><td style="mso-number-format:'\@'">004178</td><td>Gallagher, Gita</td><td>9</td><td>09/18/2024</td><td class="num" x:num="2.83">2.83</td></tr>
+<tr><td style="mso-number-format:'\@'">004191</td><td>Holloway, Hugo</td><td>10</td><td>04/16/2024</td><td class="num" x:num="1.68">1.68</td></tr>
+<tr><td style="mso-number-format:'\@'">004204</td><td>Ingersoll, Iris</td><td>10</td><td>09/24/2024</td><td class="num" x:num="2.99">2.99</td></tr>
+<tr><td style="mso-number-format:'\@'">004217</td><td>Jablonski, Jude</td><td>9</td><td>02/16/2024</td><td class="num" x:num="3.36">3.36</td></tr>
+<tr><td style="mso-number-format:'\@'">004230</td><td>Kowalczyk, Ada</td><td>9</td><td>02/28/2024</td><td class="num" x:num="2.65">2.65</td></tr>
+<tr><td style="mso-number-format:'\@'">004243</td><td>Lindqvist, Bram</td><td>9</td><td>09/13/2024</td><td class="num" x:num="2.18">2.18</td></tr>
+<tr><td style="mso-number-format:'\@'">004256</td><td>Montgomery, Cleo</td><td>9</td><td>06/26/2024</td><td class="num" x:num="1.64">1.64</td></tr>
+<tr><td style="mso-number-format:'\@'">004269</td><td>Northcott, Dov</td><td>12</td><td>09/17/2024</td><td class="num" x:num="2.05">2.05</td></tr>
+<tr><td style="mso-number-format:'\@'">004282</td><td>Okonkwo, Esme</td><td>12</td><td>07/14/2024</td><td class="num" x:num="3.42">3.42</td></tr>
+<tr><td style="mso-number-format:'\@'">004295</td><td>Pemberton, Finn</td><td>12</td><td>01/11/2024</td><td class="num" x:num="1.63">1.63</td></tr>
+<tr><td style="mso-number-format:'\@'">004308</td><td>Quintero, Gita</td><td>9</td><td>06/23/2024</td><td class="num" x:num="1.79">1.79</td></tr>
+<tr><td style="mso-number-format:'\@'">004321</td><td>Rasmussen, Hugo</td><td>12</td><td>01/25/2024</td><td class="num" x:num="3.56">3.56</td></tr>
+<tr><td style="mso-number-format:'\@'">004334</td><td>Sorensen, Iris</td><td>9</td><td>03/19/2024</td><td class="num" x:num="2.83">2.83</td></tr>
+<tr><td style="mso-number-format:'\@'">004347</td><td>Thistlewood, Jude</td><td>9</td><td>08/21/2024</td><td class="num" x:num="3.81">3.81</td></tr>
+<tr><td style="mso-number-format:'\@'">004360</td><td>Underhill, Ada</td><td>12</td><td>01/11/2024</td><td class="num" x:num="3.49">3.49</td></tr>
+<tr><td style="mso-number-format:'\@'">004373</td><td>Valdivia, Bram</td><td>10</td><td>01/10/2024</td><td class="num" x:num="2.10">2.10</td></tr>
+<tr><td style="mso-number-format:'\@'">004386</td><td>Whitcombe, Cleo</td><td>12</td><td>02/22/2024</td><td class="num" x:num="3.94">3.94</td></tr>
+<tr><td style="mso-number-format:'\@'">004399</td><td>Xiomarra, Dov</td><td>9</td><td>03/17/2024</td><td class="num" x:num="2.15">2.15</td></tr>
+<tr><td style="mso-number-format:'\@'">004412</td><td>Yarborough, Esme</td><td>9</td><td>03/15/2024</td><td class="num" x:num="1.87">1.87</td></tr>
+<tr><td style="mso-number-format:'\@'">004425</td><td>Zielinski, Finn</td><td>9</td><td>04/26/2024</td><td class="num" x:num="3.42">3.42</td></tr>
+<tr><td style="mso-number-format:'\@'">004438</td><td>Ashcombe, Gita</td><td>12</td><td>08/26/2024</td><td class="num" x:num="2.17">2.17</td></tr>
+<tr><td style="mso-number-format:'\@'">004451</td><td>Blackwood, Hugo</td><td>9</td><td>08/23/2024</td><td class="num" x:num="2.24">2.24</td></tr>
+<tr><td style="mso-number-format:'\@'">004464</td><td>Crestfield, Iris</td><td>11</td><td>05/24/2024</td><td class="num" x:num="3.68">3.68</td></tr>
+<tr><td style="mso-number-format:'\@'">004477</td><td>Dunmore, Jude</td><td>9</td><td>08/12/2024</td><td class="num" x:num="1.59">1.59</td></tr>
+</table>
+</body>
+</html>

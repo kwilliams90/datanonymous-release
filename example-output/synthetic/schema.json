@@ -1,5 +1,5 @@
 {
-  "generator": "datanonymous 0.1.0",
+  "generator": "datanonymous 0.1.0rc1",
   "synthetic": true,
   "seed": 1,
   "files": [

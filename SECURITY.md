@@ -4,7 +4,7 @@ datanonymous processes sensitive inputs locally. Keep original records, profiles
 
 ## Reporting a problem
 
-Report a reproducible software problem through the [repository issues](https://github.com/kwilliams90/datanonymous/issues) using wholly invented records. Include the affected version, operating system, file format, redacted command, expected behavior, and an invented example that demonstrates the failure. Describe whether it affects identifiers, linkage, metadata, package validation, or code compatibility.
+Report a reproducible software problem through the [repository issues](https://github.com/kwilliams90/datanonymous-release/issues) using wholly invented records. Include the affected version, operating system, file format, redacted command, expected behavior, and an invented example that demonstrates the failure. Describe whether it affects identifiers, linkage, metadata, package validation, or code compatibility.
 
 Public issues are public. Do not attach student records, source reports, identifiers, production paths, seeds paired with real inputs, crash dumps, or screenshots containing them. The project has no published dedicated private security contact or guaranteed response time. If a report cannot be made safely with an invented example, keep the sensitive evidence local and request a private reporting channel without disclosing it.
 

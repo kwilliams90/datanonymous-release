@@ -1,0 +1,84 @@
+name: Bug report
+description: Report a reproducible problem using wholly invented data.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        > [!WARNING]
+        > **Issues are public. Do not post personally identifiable information.**
+        > No student or staff records, identifiers, source reports, production paths, seeds used with real inputs, crash dumps, or screenshots containing any of these. Reproduce the problem with invented records instead. See [SECURITY.md](https://github.com/kwilliams90/datanonymous-release/blob/main/SECURITY.md) if you can't.
+
+  - type: checkboxes
+    id: no-pii
+    attributes:
+      label: Privacy check
+      options:
+        - label: Everything in this issue, including attachments, uses wholly invented data and contains no real personal information.
+          required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: datanonymous version
+      description: Output of `datanonymous --version`.
+      placeholder: datanonymous, version 0.1.0rc1
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: Operating system and Python version
+      placeholder: Windows 11, Python 3.12.7
+    validations:
+      required: true
+
+  - type: input
+    id: format
+    attributes:
+      label: Input file format
+      placeholder: CSV, XLSX, Parquet, ...
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      multiple: true
+      options:
+        - Identifiers
+        - Linkage between tables
+        - Metadata
+        - Package validation or refusal
+        - Code compatibility
+        - Other
+
+  - type: textarea
+    id: command
+    attributes:
+      label: Command
+      description: The command you ran, with real paths and names replaced.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Error messages or output, with any real values removed.
+    validations:
+      required: true
+
+  - type: textarea
+    id: example
+    attributes:
+      label: Invented example
+      description: A small invented input that demonstrates the problem. Paste it here or attach it.

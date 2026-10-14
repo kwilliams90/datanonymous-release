@@ -1,0 +1,29 @@
+name: Feature request
+description: Suggest an improvement or a supported input layout.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        > [!WARNING]
+        > **Issues are public. Do not post personally identifiable information.** Describe data layouts with invented column names and values only.
+
+  - type: checkboxes
+    id: no-pii
+    attributes:
+      label: Privacy check
+      options:
+        - label: Everything in this issue, including attachments, uses wholly invented data and contains no real personal information.
+          required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would help?

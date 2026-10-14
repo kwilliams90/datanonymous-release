@@ -1,4 +1,4 @@
-# Release candidate 0.1.0
+# Release candidate 0.1.0rc1
 
 Sharing is now the default workflow. It generates fictional table memberships
 and relationships, independently assigns supported primary-person counts, and

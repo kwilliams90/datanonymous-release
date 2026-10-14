@@ -4,12 +4,30 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "datanonymous"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Profile tabular files and write shape-faithful synthetic copies for building code against student data without exposing it"
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 requires-python = ">=3.12"
+authors = [{ name = "Kelly Williams" }]
+keywords = ["synthetic data", "anonymization", "de-identification", "privacy", "FERPA", "education", "tabular data", "test data"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Education",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+    "Topic :: Security",
+    "Topic :: Software Development :: Testing",
+]
 dependencies = [
     "pandas>=3.0",
     "numpy>=2.2",
@@ -18,7 +36,6 @@ dependencies = [
     "xlrd>=2.0",
     "click>=8.1",
     "PyYAML>=6.0",
-    # Pinned exactly: Faker output for a given seed can change between releases (design D24/D26).
     "Faker==40.40.0",
 ]
 
@@ -31,11 +48,19 @@ dev = [
 [project.scripts]
 datanonymous = "datanonymous.cli:main"
 
+[project.urls]
+Homepage = "https://github.com/kwilliams90/datanonymous-release"
+Documentation = "https://github.com/kwilliams90/datanonymous-release/tree/main/guides"
+Source = "https://github.com/kwilliams90/datanonymous-release"
+Issues = "https://github.com/kwilliams90/datanonymous-release/issues"
+Changelog = "https://github.com/kwilliams90/datanonymous-release/blob/main/guides/release-notes.md"
+Security = "https://github.com/kwilliams90/datanonymous-release/blob/main/SECURITY.md"
+
+[tool.setuptools.dynamic]
+version = { attr = "datanonymous.__version__" }
+
 [tool.setuptools.packages.find]
 where = ["src"]
-
-[tool.setuptools.package-data]
-datanonymous = ["data/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -195,13 +195,112 @@ def test_rare_iep_vocabulary_cannot_borrow_common_roster_holders(tmp_path):
         assert (output / "roster.csv").exists()
 
 
-@pytest.mark.parametrize("variant, diagnostic", [("thirteen_events", "count class"), ("rare_id", "format class")])
-def test_rare_person_count_and_identifier_shape_refuse_the_whole_release(tmp_path, variant, diagnostic):
-    _, output, report, run = _execute(tmp_path, variant)
-    assert not run.package["released"]
-    assert not output.exists() and report.is_dir()
+@pytest.mark.parametrize("variant, diagnostic, refused", [
+    ("thirteen_events", "count class", {"events.csv"}),
+    # the rare ID's holder is in the roster and in discipline; IEP and events refer to the roster
+    ("rare_id", "format class", {"roster.csv", "discipline.csv"}),
+])
+def test_rare_person_count_and_identifier_shape_leave_out_only_the_offending_tables(tmp_path, variant, diagnostic,
+                                                                                    refused):
+    original, output, report, run = _execute(tmp_path, variant)
+    assert run.package["released"], _diagnostic(run)
+    assert exit_code(run) == 3
+    assert {f.rel_path for f in run.files if not f.written} == refused
+    assert set(hash_inventory(output)) == {*corpus_rows(variant), *DOCS} - refused
+    failures = {r["input_path"]: r for r in _failures(report)}
+    assert set(failures) == refused
+    assert all(diagnostic in r["reason"] for r in failures.values()), failures
+    # the remaining tables keep their rows, invent their keys, and join among themselves only
+    source_ids = {r["Student_ID"] for r in read_records(original / "roster.csv")}
+    written = {name: read_records(output / name) for name in corpus_rows(variant) if name not in refused}
+    for name, rows in written.items():
+        assert len(rows) == len(read_records(original / name))
+        assert not {r["Student_ID"] for r in rows} & source_ids
+    if "roster.csv" in written:
+        relation = {r["Student_ID"]: (r["State_Student_ID"], r["Family_ID"]) for r in written["roster.csv"]}
+        for rows in written.values():
+            assert all(relation[r["Student_ID"]] == (r["State_Student_ID"], r["Family_ID"]) for r in rows)
+
+
+def test_tables_whose_join_target_is_left_out_are_planned_without_that_join(tmp_path):
+    # rare_id: the roster (the rare ID's holder) is left out. IEP and events join to it, so each keeps its rows and
+    # is planned over the IDs the remaining tables hold, whose format class no longer includes the rare holder's.
+    _, output, _, run = _execute(tmp_path, "rare_id")
+    assert run.package["released"], _diagnostic(run)
+    for name in ("iep.csv", "events.csv"):
+        fr = next(f for f in run.files if f.rel_path == name)
+        assert "roster.csv" in {link.get("parent", "").split("::")[0]
+                                for t in fr.tables for link in t.structure.cross_file_keys}
+        assert fr.written
+    iep, events = (read_records(output / name) for name in ("iep.csv", "events.csv"))
+    ids = [r["Student_ID"] for r in iep + events]
+    assert len({len(i) for i in ids}) == 1 and not any("-" in i for i in ids)
+    # the joins between the written tables still hold: IEP and events hold the same 120 fictional people
+    assert {r["Student_ID"] for r in iep} == {r["Student_ID"] for r in events}
+    assert len({r["Student_ID"] for r in iep}) == 120
+
+
+def _write_csv(path: Path, rows: list[dict[str, str]]) -> None:
+    with path.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=list(rows[0]), lineterminator="\n")
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def test_row_numbers_left_without_their_roster_are_not_kept_as_row_numbers(tmp_path):
+    # The roster's Student_ID is the row numbers 1..100 (kept as they are, D9); its rare State_Student_ID format
+    # leaves it out. The child's 31..50 are not row numbers on their own: they get fictional IDs that are no real ID
+    # of the run, and the left-out roster's 1..100 range does not show through.
+    original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
+    original.mkdir()
+    state = [f"T{720007 + i * 41:06d}" for i in range(100)]
+    state[0] = "XX-901234"
+    _write_csv(original / "roster.csv", [
+        {"Student_ID": str(i + 1), "State_Student_ID": state[i], "Grade": str(6 + i % 4),
+         "Score": f"{(5500 + (i * 71) % 3500) / 100:.2f}"} for i in range(100)])
+    child_ids = [str(i + 1) for i in range(30, 50)]
+    _write_csv(original / "services.csv", [
+        {"Student_ID": child_ids[j], "Frequency": ("Weekly", "Monthly")[j % 2],
+         "Minutes": f"{(1500 + (j * 137) % 9000) / 100:.2f}"} for j in range(20)])
+    run = execute(Settings(mode="sharing", seed=573291), original, output, report)
+    assert run.package["released"], _diagnostic(run)
+    assert {f.rel_path for f in run.files if not f.written} == {"roster.csv"}
+    assert any("format class" in r for r in next(f for f in run.files if f.rel_path == "roster.csv").reasons)
+    ids = [r["Student_ID"] for r in read_records(output / "services.csv")]
+    assert len(set(ids)) == 20
+    assert not set(ids) & set(child_ids)
+    assert not set(ids) & {str(i) for i in range(1, 101)}
+    # the leak scan does not skip the column as kept row numbers, whichever file it reads it from
+    for fr in run.files:
+        for tp in fr.tables:
+            column = next(p for p in tp.columns if p.name == "Student_ID")
+            assert not column.params.get("_identity_mapped"), fr.rel_path
+            assert not str(column.params.get("id_mapping", "")).startswith("kept"), fr.rel_path
+
+
+def test_all_or_nothing_withholds_every_table_when_the_population_refuses_one(tmp_path):
+    original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
+    write_corpus(original, "thirteen_events")
+    run = execute(Settings(mode="sharing", seed=573291, all_or_nothing=True), original, output, report)
+    assert not run.package["released"] and not output.exists()
     assert all(not f.written for f in run.files)
-    assert any(diagnostic in m.text for m in blocking_findings(run)), _diagnostic(run)
+    assert exit_code(run) == 3
+    assert any("count class" in m.text for m in blocking_findings(run)), _diagnostic(run)
+
+
+def test_a_population_refusal_that_names_no_table_withholds_every_table(tmp_path, monkeypatch):
+    from datanonymous.errors import UnsupportedColumnError
+    from datanonymous.generate import population
+
+    def refuse(*args, **kwargs):
+        raise UnsupportedColumnError("sharing population: invented run-level refusal")
+
+    monkeypatch.setattr(population, "_mint", refuse)
+    _, output, report, run = _execute(tmp_path)
+    assert not run.package["released"] and not output.exists()
+    assert all(not f.written for f in run.files)
+    assert sorted(r["input_path"] for r in _failures(report)) == sorted(corpus_rows())
+    assert all("invented run-level refusal" in r["reason"] for r in _failures(report))
 
 
 @pytest.mark.parametrize("column,actors", [
@@ -323,12 +422,14 @@ def test_a_complete_run_logs_no_failures_and_says_nothing_was_left_out(canonical
 def test_when_every_table_fails_nothing_is_written_and_an_empty_out_dir_stays_empty(tmp_path):
     original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
     write_corpus(original, "thirteen_events")
+    for name in set(corpus_rows()) - {"events.csv"}:
+        (original / name).unlink()
     output.mkdir()
     run = execute(Settings(mode="sharing", seed=573291), original, output, report)
     assert not run.package["released"]
     assert exit_code(run) == 3
     assert output.is_dir() and not any(output.iterdir())
-    assert sorted(r["input_path"] for r in _failures(report)) == sorted(corpus_rows("thirteen_events"))
+    assert [r["input_path"] for r in _failures(report)] == ["events.csv"]
 
 
 def test_all_or_nothing_withholds_every_table_when_one_fails(tmp_path):

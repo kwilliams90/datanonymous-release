@@ -5,6 +5,10 @@
   folder (never in the output folder) and counted, without names, in the
   output's README; the run exits with code 3. `--all-or-nothing` restores the
   earlier behaviour of writing nothing unless every file succeeds.
+- A key-population refusal in sharing mode (a rare rows-per-person count class,
+  a rare identifier format) now leaves out only the tables it concerns; the
+  other tables are planned again without them, dropping any join to a table
+  left out.
 - `--out-dir` may be an existing empty folder; a folder with files in it is
   refused with a message saying so. The report folder may sit inside the input.
 

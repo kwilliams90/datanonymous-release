@@ -741,20 +741,39 @@ def _execute(settings: Settings, input_path: Path, out_dir: Path | None = None, 
     leaks.plan_digit_keys(run.files)  # run-wide real phones/SSNs: no generated value holds one, even by chance
     pseudonyms.plan(run.files, seed)  # D35: one pseudonym per real unit in the run, never a real value of it
     if settings.mode == "sharing":
-        from .generate.population import plan_population
+        from .generate.population import PopulationRefusal, plan_population
 
-        try:
-            plan_population(run.files, seed, settings, reg, namespaces)
-            for fr in run.files:
-                for tp in fr.tables:
-                    if tp.private.extra.get("_sharing_population") is not None:
-                        tp.messages = [message for message in tp.messages if message.code != "id_columns_unrelated"]
-                        for column in tp.columns:
-                            column.messages = [message for message in column.messages if message.code != "id_columns_unrelated"]
-        except DatanonymousError as error:
+        while True:
+            try:
+                plan_population(run.files, seed, settings, reg, namespaces)
+            except PopulationRefusal as refusal:
+                if not settings.all_or_nothing:
+                    # leave the refused tables out and plan the others again (each pass leaves one out)
+                    for fr in run.files:
+                        error = next((e for (path, _), e in refusal.refused.items() if path == fr.rel_path), None)
+                        if error is not None:
+                            fr.fail(error.message, error.fix)
+                    continue
+                error = refusal
+            except DatanonymousError as caught:  # a refusal no table answers for: nothing is planned
+                error = caught
+            else:
+                for fr in run.files:
+                    for t_i, tp in enumerate(fr.tables):
+                        for i, key in namespaces.get((fr.rel_path, t_i), {}).items():
+                            if tp.columns[i].params.get("_identity_mapped") and not reg.namespaces[key].identity:
+                                # row numbers whose roster was left out: real IDs the leak scan checks (every file)
+                                tp.columns[i].params["_identity_mapped"] = False
+                                tp.columns[i].params["id_mapping"] = "synthetic: same shape, never a real ID (D9)"
+                        if tp.private.extra.get("_sharing_population") is not None:
+                            tp.messages = [message for message in tp.messages if message.code != "id_columns_unrelated"]
+                            for column in tp.columns:
+                                column.messages = [message for message in column.messages if message.code != "id_columns_unrelated"]
+                break
             for fr in run.files:
                 if not fr.failed:
                     fr.fail(error.message, error.fix)
+            break
     out_dir.mkdir(parents=True, exist_ok=True)
     written: list[docs.WrittenFile] = []
     for fr in run.files:

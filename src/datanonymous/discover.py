@@ -17,11 +17,14 @@
   ``.xlsm`` -> ``.xlsx`` and SAS -> ``.parquet`` (D17).
 * Directory safety (D20, D21): the input folder (for a file INPUT: its folder,
   and the folder its real file is in), the out dir and the report dir must be
-  three separate trees: none may be, contain or lie inside another. Every test
+  separate trees: none may be, contain or lie inside another, except that the
+  report dir may lie inside the input (the walk skips it; the input may not lie
+  inside the report dir, whose files could replace input files). Every test
   compares REAL locations (:mod:`datanonymous.paths`), so a symlink, junction,
   short name or other alias cannot smuggle the out dir into the input or the
   report into the shareable out dir. An existing out or report dir may not hold
-  a link that leads out of it, and a non-empty one needs ``--force``.
+  a link that leads out of it, and a non-empty one needs ``--force`` (refused
+  in sharing mode: there both must be new or empty).
 * The walk follows linked folders (symlinks and junctions alike) but never one
   that leads back to a folder above it (a loop: listed as skipped), and it
   refuses (exit 2) any folder or file whose real location is inside the out
@@ -90,15 +93,20 @@ def input_folders(input_path: Path) -> list[tuple[str, Path]]:
     return folders
 
 
-def check_dirs(input_path: Path, out_dir: Path, report_dir: Path, force: bool) -> None:
-    """Directory-safety rules (raise UsageError, exit 2) on real locations: see the module docstring."""
+def check_dirs(input_path: Path, out_dir: Path, report_dir: Path, force: bool, sharing: bool = False) -> None:
+    """Directory-safety rules (raise UsageError, exit 2) on real locations: see the module docstring.
+
+    ``sharing``: a non-empty folder cannot be forced (sharing mode refuses ``--force``), so say what to do instead.
+    """
     dirs = (("--out-dir", out_dir, "out dir"), ("--report-dir", report_dir, "report dir"))
     for flag, d, _ in dirs:
         if d.exists() and not d.is_dir():
             raise UsageError(f"{flag} {d} exists and is not a directory")
     for label, root in input_folders(input_path):
         for flag, d, what in dirs:
-            if is_within(d, root):
+            # the local report may sit inside the input (the walk skips it); the input inside the report dir may
+            # not: report files written there could replace real input files
+            if is_within(d, root) and flag != "--report-dir":
                 raise UsageError(f"{_named(flag, d)} is inside {label} {root}; choose a folder outside it")
             if is_within(root, d):
                 raise UsageError(f"the input must not be inside the {what}: {label} {root} is inside "
@@ -111,6 +119,9 @@ def check_dirs(input_path: Path, out_dir: Path, report_dir: Path, force: bool) -
                          "would land in the shareable out dir; choose two separate folders")
     for flag, d, _ in dirs:
         if _non_empty(d) and not force:
+            if sharing:
+                raise UsageError(f"{flag} {d} already contains files; sharing mode needs a new or empty folder "
+                                 "(clear it or choose another)")
             raise UsageError(f"{flag} {d} is not empty; pass --force to write into it")
     for flag, d, _ in dirs:
         for rel, target in paths.escaping_links(d)[:1]:
@@ -124,7 +135,13 @@ class _Walk:
     def __init__(self, root: Path, avoid: tuple[tuple[str, Path], ...]) -> None:
         self.root = root
         self.avoid = [(flag, d, paths.real_path(d)) for flag, d in avoid]
+        #: the report dir, which may sit inside the input: that folder is not walked (never read as input)
+        self.skip = [paths.real_path(d) for flag, d in avoid if flag == "--report-dir"]
         self.chain: dict[str, tuple[str, ...]] = {str(root): (paths.real_path(root),)}
+
+    def skipped(self, real: str) -> bool:
+        """The walked folder at real location ``real`` is the report dir or inside it: not part of the input."""
+        return any(paths.contains(d_real, real) or paths.same_folder_on_path(real, d_real) for d_real in self.skip)
 
     def guard(self, p: Path, real: str, linked: bool = True) -> None:
         """Refuse a walked folder or file whose real location is inside the out dir or the report dir.
@@ -151,6 +168,8 @@ class _Walk:
             p = os.path.join(dirpath, name)
             linked = paths.is_link(p)
             real = paths.real_path(p) if linked else os.path.join(chain[-1], os.path.normcase(name))
+            if self.skip and self.skipped(real if linked else paths.real_path(p)):
+                continue
             if linked and any(paths.contains(real, a) for a in chain):
                 skipped.append(SkippedFile(Path(p).relative_to(self.root).as_posix() + "/",
                                            "linked folder leads back to a folder above it (a loop); not followed"))

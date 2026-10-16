@@ -231,6 +231,33 @@ def test_check_dirs_is_symmetric_for_out_and_report(tmp_path: Path) -> None:
     check_dirs(src, base / "o", base / "r", force=True)  # siblings are fine
 
 
+def test_report_dir_inside_the_input_is_allowed(tmp_path: Path) -> None:
+    src = _input(tmp_path)
+    check_dirs(src, tmp_path / "out", src / "report", force=False)
+    check_dirs(src / "data.csv", tmp_path / "out", src / "report", force=False)  # a file input: its folder
+
+
+def test_run_with_the_report_dir_inside_the_input_never_reads_the_report(tmp_path: Path) -> None:
+    src = _input(tmp_path)
+    for _ in range(2):  # the second run finds the first run's report in the input and skips it
+        res = run_cli(src, "--out-dir", tmp_path / "out", "--report-dir", src / "report", "--force", "--seed", "1")
+        assert res.exit_code == 0, res.output
+    assert (src / "report" / "report.json").is_file()
+    assert sorted(p.name for p in (tmp_path / "out").iterdir()
+                  if p.suffix == ".csv" or p.is_dir()) == ["data.csv"]
+    report = json.loads((src / "report" / "report.json").read_text(encoding="utf-8"))
+    assert [f["source"] for f in report["files"]] == ["data.csv"]
+    assert not report["skipped"]
+
+
+def test_input_inside_the_report_dir_is_still_refused(tmp_path: Path) -> None:
+    """Report files written into the input root could replace real input files."""
+    src = _input(tmp_path)
+    for rep in (src, tmp_path):
+        with pytest.raises(UsageError, match="the input must not be inside the report dir"):
+            check_dirs(src, tmp_path / "out", rep, force=True)
+
+
 # --------------------------------------------------------------------------- links inside an existing out/report dir
 @pytest.mark.parametrize("kind", LINK_KINDS)
 def test_link_inside_the_out_dir_leading_into_the_input_is_refused(tmp_path: Path, kind: str) -> None:

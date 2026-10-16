@@ -1,3 +1,13 @@
+# Unreleased
+
+- Sharing mode leaves out the input files it cannot write safely and writes the
+  rest. The files left out are listed in `sharing-failures.csv` in the report
+  folder (never in the output folder) and counted, without names, in the
+  output's README; the run exits with code 3. `--all-or-nothing` restores the
+  earlier behaviour of writing nothing unless every file succeeds.
+- `--out-dir` may be an existing empty folder; a folder with files in it is
+  refused with a message saying so. The report folder may sit inside the input.
+
 # Release candidate 0.1.0rc1
 
 Sharing is now the default workflow. It generates fictional table memberships

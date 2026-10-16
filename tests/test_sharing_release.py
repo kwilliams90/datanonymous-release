@@ -124,6 +124,37 @@ def test_default_cli_actually_uses_sharing_without_compatibility_helper(tmp_path
     assert evidence["released"] and not evidence["blocking_codes"]
 
 
+def _cli(*args):
+    return CliRunner().invoke(main, [str(a) for a in args], catch_exceptions=False)
+
+
+def test_cli_writes_the_other_tables_exits_3_and_points_to_the_failure_log(tmp_path):
+    original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
+    write_corpus(original)
+    (original / "broken.xlsx").write_bytes(b"invented invalid workbook")
+    result = _cli(original, "--out-dir", output, "--report-dir", report, "--seed", "573291")
+    assert result.exit_code == 3, result.output
+    assert set(hash_inventory(output)) == {*corpus_rows(), *DOCS}
+    assert "1 input file(s) were not written to the output folder" in result.output
+    assert "sharing-failures.csv" in result.output
+
+
+def test_cli_all_or_nothing_writes_nothing_when_one_table_fails(tmp_path):
+    original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
+    write_corpus(original)
+    (original / "broken.xlsx").write_bytes(b"invented invalid workbook")
+    result = _cli(original, "--out-dir", output, "--report-dir", report, "--seed", "573291", "--all-or-nothing")
+    assert result.exit_code == 3, result.output
+    assert not output.exists()
+    assert "nothing was written to the output folder" in result.output
+
+
+def test_cli_help_says_the_out_dir_must_be_new_or_empty():
+    text = " ".join(_cli("run", "--help").output.split())
+    assert "--out-dir" in text and "new or empty folder" in text
+    assert "--all-or-nothing" in text
+
+
 def test_source_relabeling_and_row_reversal_do_not_change_fictional_relationships(tmp_path, canonical_release):
     _, first_output, _, first = canonical_release
     assert first.package["released"], _diagnostic(first)
@@ -155,11 +186,13 @@ def test_rare_iep_vocabulary_cannot_borrow_common_roster_holders(tmp_path):
     fact_holders = {r["Student_ID"] for r in read_records(original / "iep.csv")
                     if r["Support_Program"] == RARE_VOCABULARY}
     assert len(roster_holders) == 60 and len(fact_holders) == 1
-    if run.package["released"]:
+    assert run.package["released"], _diagnostic(run)
+    if (output / "iep.csv").exists():
         assert RARE_VOCABULARY not in {r["Support_Program"] for r in read_records(output / "iep.csv")}
-    else:
-        assert not output.exists()
-        assert any("rare" in m.text or "distinct people" in m.text for m in blocking_findings(run)), _diagnostic(run)
+    else:  # the fact table is left out on its own; the roster's common holders do not rescue it
+        iep = next(f for f in run.files if f.rel_path == "iep.csv")
+        assert any("rare" in r or "distinct people" in r for r in iep.reasons), iep.reasons
+        assert (output / "roster.csv").exists()
 
 
 @pytest.mark.parametrize("variant, diagnostic", [("thirteen_events", "count class"), ("rare_id", "format class")])
@@ -225,20 +258,98 @@ def test_stale_destination_is_refused_without_touching_existing_evidence(tmp_pat
     stale = output / "stale.csv"
     stale.write_bytes(b"private-stale-evidence\n")
     before = hash_inventory(output)
-    with pytest.raises(UsageError, match="does not yet exist|not empty"):
+    with pytest.raises(UsageError, match="already contains files; .*new or empty folder"):
         execute(Settings(mode="sharing"), original, output, tmp_path / "local-report")
     assert hash_inventory(output) == before
 
 
-def test_partial_input_failure_withholds_other_generated_tables(tmp_path):
+def test_existing_empty_out_dir_receives_the_package(tmp_path):
+    original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
+    write_corpus(original)
+    output.mkdir()
+    run = execute(Settings(mode="sharing", seed=573291), original, output, report)
+    assert run.package["released"], _diagnostic(run)
+    assert exit_code(run) == 0
+    assert set(hash_inventory(output)) == {*corpus_rows(), "README.md", "DATA_DICTIONARY.md", "schema.json"}
+    assert not list(report.glob(".sharing-staging-*"))
+
+
+def _failures(report: Path) -> list[dict[str, str]]:
+    with (report / "sharing-failures.csv").open(encoding="utf-8", newline="") as stream:
+        return list(csv.DictReader(stream))
+
+
+DOCS = {"README.md", "DATA_DICTIONARY.md", "schema.json"}
+
+
+def test_a_broken_table_is_left_out_and_the_others_are_written(tmp_path):
     original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
     write_corpus(original)
     (original / "broken.xlsx").write_bytes(b"invented invalid workbook")
     run = execute(Settings(mode="sharing", seed=573291), original, output, report)
+    assert run.package["released"], _diagnostic(run)
+    assert exit_code(run) == 3
+    assert set(hash_inventory(output)) == {*corpus_rows(), *DOCS}
+    assert run.package["inventory_sha256"] == hash_inventory(output)
+    assert not list(report.glob(".sharing-staging-*"))
+    rows = _failures(report)
+    assert [(r["input_path"], r["outcome"]) for r in rows] == [("broken.xlsx", "failed")]
+    assert rows[0]["reason"]
+    readme = (output / "README.md").read_text(encoding="utf-8")
+    assert f"1 of {len(corpus_rows()) + 1} input files were not written" in readme
+    assert "joins hold only among the files in this folder" in readme
+    assert "broken" not in readme
+
+
+def test_skipped_inputs_are_logged_and_do_not_block(tmp_path):
+    original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
+    write_corpus(original)
+    (original / "notes.docx").write_bytes(b"invented notes")
+    run = execute(Settings(mode="sharing", seed=573291), original, output, report)
+    assert run.package["released"], _diagnostic(run)
+    assert exit_code(run) == 0
+    assert set(hash_inventory(output)) == {*corpus_rows(), *DOCS}
+    assert [(r["input_path"], r["outcome"]) for r in _failures(report)] == [("notes.docx", "skipped")]
+    assert f"1 of {len(corpus_rows()) + 1} input files were not written" in (output / "README.md").read_text(
+        encoding="utf-8")
+
+
+def test_a_complete_run_logs_no_failures_and_says_nothing_was_left_out(canonical_release):
+    _, output, report, _ = canonical_release
+    assert _failures(report) == []
+    assert "were not written" not in (output / "README.md").read_text(encoding="utf-8")
+
+
+def test_when_every_table_fails_nothing_is_written_and_an_empty_out_dir_stays_empty(tmp_path):
+    original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
+    write_corpus(original, "thirteen_events")
+    output.mkdir()
+    run = execute(Settings(mode="sharing", seed=573291), original, output, report)
+    assert not run.package["released"]
+    assert exit_code(run) == 3
+    assert output.is_dir() and not any(output.iterdir())
+    assert sorted(r["input_path"] for r in _failures(report)) == sorted(corpus_rows("thirteen_events"))
+
+
+def test_all_or_nothing_withholds_every_table_when_one_fails(tmp_path):
+    original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
+    write_corpus(original)
+    (original / "broken.xlsx").write_bytes(b"invented invalid workbook")
+    run = execute(Settings(mode="sharing", seed=573291, all_or_nothing=True), original, output, report)
     assert not run.package["released"] and not output.exists()
     assert "sharing_incomplete" in run.package["blocking_codes"]
     assert all(not f.written for f in run.files)
-    assert any(any(path.glob("*.csv")) for path in report.glob(".sharing-staging-*"))
+    assert exit_code(run) == 3
+    assert "broken.xlsx" in {r["input_path"] for r in _failures(report)}
+
+
+def test_all_or_nothing_withholds_every_table_when_an_input_is_skipped(tmp_path):
+    original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
+    write_corpus(original)
+    (original / "notes.docx").write_bytes(b"invented notes")
+    run = execute(Settings(mode="sharing", seed=573291, all_or_nothing=True), original, output, report)
+    assert not run.package["released"] and not output.exists()
+    assert "sharing_skipped_inputs" in run.package["blocking_codes"]
 
 
 def test_foreign_staging_artifact_blocks_promotion(tmp_path, monkeypatch):
@@ -255,8 +366,13 @@ def test_foreign_staging_artifact_blocks_promotion(tmp_path, monkeypatch):
     assert run.package["inventory_sha256"] == {}
 
 
-def test_saturated_categorical_only_package_is_still_refused(tmp_path):
-    _, output, _, run = _execute(tmp_path, "categorical_only")
-    assert not run.package["released"] and not output.exists()
-    assert "row_matches_report_only" in run.package["blocking_codes"]
-    assert all(not f.written for f in run.files)
+def test_saturated_categorical_only_tables_are_still_refused(tmp_path):
+    _, output, report, run = _execute(tmp_path, "categorical_only")
+    refused = {f.rel_path for f in run.files
+               if any(m.code == "row_matches_report_only" for m in f.all_messages())}
+    assert refused
+    assert all(not f.written for f in run.files if f.rel_path in refused)
+    assert run.package["released"], _diagnostic(run)
+    assert not refused & set(hash_inventory(output))
+    assert refused <= {r["input_path"] for r in _failures(report)}
+    assert exit_code(run) == 3

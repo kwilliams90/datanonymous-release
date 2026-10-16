@@ -6,7 +6,7 @@ import pytest
 
 from datanonymous.errors import UsageError
 from datanonymous.model import FileResult, Message
-from datanonymous.privacy.package import check_fresh_destination, finish, inventory
+from datanonymous.privacy.package import finish, inventory
 from datanonymous.privacy.sharing_policy import blocking_findings, validate_settings
 
 
@@ -22,12 +22,6 @@ def test_sharing_refuses_bypasses(flag):
 
 def test_fidelity_is_explicit_bypass_scope():
     validate_settings(SimpleNamespace(mode="fidelity", force_factor=True, min_cell=1))
-
-
-def test_existing_empty_directory_is_not_fresh(tmp_path):
-    with pytest.raises(UsageError):
-        check_fresh_destination(tmp_path)
-    check_fresh_destination(tmp_path / "new")
 
 
 def test_inventory_requires_exact_files(tmp_path):
@@ -77,10 +71,10 @@ def test_only_complete_verified_package_is_promoted(tmp_path):
     assert (tmp_path / "share" / "data.csv").exists()
 
 
-def test_skipped_or_incomplete_input_withholds_package(tmp_path):
+def test_all_or_nothing_withholds_package_with_skipped_input(tmp_path):
     stage = tmp_path / "stage"
     stage.mkdir()
     (stage / "data.csv").write_text("x\n1\n")
     run = _run(stage)
     run.skipped = [SimpleNamespace(rel_path="unsupported")]
-    assert not finish(run, tmp_path / "share", stage)["released"]
+    assert not finish(run, tmp_path / "share", stage, all_or_nothing=True)["released"]

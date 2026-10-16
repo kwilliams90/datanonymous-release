@@ -1,4 +1,9 @@
-"""Fresh, privately staged sharing packages with a closed file inventory."""
+"""Fresh, privately staged sharing packages with a closed file inventory.
+
+By default a file that cannot be written safely is left out on its own (its output removed from the stage, the
+docs written without it) and every other file is written to the output folder; only a run-level problem
+withholds everything. ``all_or_nothing`` writes nothing unless every input file was written and none skipped.
+"""
 
 from __future__ import annotations
 
@@ -13,14 +18,18 @@ from xml.etree import ElementTree
 from ..errors import UsageError
 from ..model import Message
 from ..paths import is_link, is_within
-from .sharing_policy import POLICY_VERSION, blocking_findings
+from .sharing_policy import POLICY_VERSION, blocking_findings, finding_category
 
 
 def check_fresh_destination(destination: Path) -> None:
-    """An existing directory, dangling link or alias is never a release target."""
+    """The out dir is new or an empty real folder; a file, link or folder with files in it is never a target."""
     if os.path.lexists(destination):
-        raise UsageError("sharing mode requires an output path that does not yet exist",
-                         fix="choose a fresh --out-dir outside the input and report directories")
+        if is_link(destination) or not destination.is_dir():
+            raise UsageError(f"--out-dir {destination} exists and is not a plain folder; "
+                             "sharing mode needs a new or empty folder")
+        if any(destination.iterdir()):
+            raise UsageError(f"--out-dir {destination} already contains files; sharing mode needs a new or empty "
+                             "folder (clear it or choose another)")
     current = destination.parent
     while True:
         if is_link(current):
@@ -28,6 +37,71 @@ def check_fresh_destination(destination: Path) -> None:
         if current == current.parent:
             break
         current = current.parent
+
+
+def _blocking(messages: Any) -> list[Message]:
+    return [message for message in messages if finding_category(message) == "blocking"]
+
+
+def _remove_staged(stage: Path, rel: str) -> None:
+    """Remove a staged output and the folders it leaves empty (an empty folder would fail the inventory)."""
+    path = stage / Path(*rel.split("/"))
+    if os.path.lexists(path) and not path.is_dir():
+        os.unlink(path)
+    parent = path.parent
+    while parent != stage and parent.is_dir() and not any(parent.iterdir()):
+        parent.rmdir()
+        parent = parent.parent
+
+
+def withhold_blocked(run: Any, stage: Path, written: list[Any]) -> list[Any]:
+    """Leave out every file whose own findings block sharing; returns the ``written`` entries still written.
+
+    A FAILed file's output (or the empty folders its generation left) is removed from the stage too.
+    """
+    for file in run.files:
+        codes = sorted({message.code for message in _blocking(file.all_messages())})
+        if file.written and codes:
+            file.fail(f"not written to the output folder: its findings block sharing ({', '.join(codes)})",
+                      "see this file's warnings; fix the input or its column options and run again")
+    for file in run.files:
+        if file.failed:
+            _remove_staged(stage, file.out_rel_on_disk)
+    return [w for w in written if w.result.written]
+
+
+def _unread(run: Any) -> list[str]:
+    """Input files that FAILed before any column was read: a column flag or rule may have been meant for them."""
+    return [file.rel_path for file in run.files if file.failed and not file.tables]
+
+
+def _flag_may_name_unread(message: Message, run: Any, settings: Any) -> bool:
+    unread = _unread(run)
+    if not unread:
+        return False
+    if settings is None:
+        return True
+    from ..config import _KV_COL, _LIST_COL
+
+    refs = [ref for name in _LIST_COL for ref in getattr(settings, name, ())]
+    refs += [ref for name in _KV_COL for ref, _ in getattr(settings, name, ())]
+    for ref in refs:
+        if repr(ref.raw) in message.text:
+            return ref.file is None or ref.file.replace("\\", "/").strip("/") in unread
+    return True
+
+
+def _blocks_partial(message: Message, run: Any, settings: Any) -> bool:
+    """A run-level finding that still withholds the whole output when failed files are only left out."""
+    if message.code == "leak_found":
+        return False  # a summary: the files holding the values FAILed and were removed
+    if message.code == "leak_scan_incomplete" and "every other file was verified" in message.text:
+        return False  # the unverified files FAILed and were removed; a scan that did not complete still blocks
+    if message.code == "unused_column_flag":
+        return not _flag_may_name_unread(message, run, settings)
+    if message.code == "rule_unused":
+        return not _unread(run)
+    return True
 
 
 def create_staging(report_dir: Path) -> Path:
@@ -109,23 +183,34 @@ def inventory(stage: Path, expected: set[str]) -> tuple[list[Message], dict[str,
             raise ValueError("incomplete package inventory")
     except (OSError, ValueError, RuntimeError, NotImplementedError, zipfile.BadZipFile, ElementTree.ParseError):
         # Exception text can contain a source-derived filename or container text.
-        findings.append(Message("error", "sharing_inventory", "sharing package inventory or container verification failed",
+        findings.append(Message("error", "sharing_inventory", "the contents of the output folder could not be verified, so nothing was written to it",
                                 fix="resolve incomplete, foreign, linked or unreadable artifacts and regenerate"))
         hashes = {}
     return findings, hashes
 
 
-def finish(run: Any, destination: Path, stage: Path) -> dict[str, Any]:
-    """Promote only a fully validated package; return a local evidence record."""
+def finish(run: Any, destination: Path, stage: Path, all_or_nothing: bool = False,
+           settings: Any = None) -> dict[str, Any]:
+    """Move the validated output into ``destination``; return a local evidence record."""
     expected = {file.out_rel_on_disk for file in run.files if file.written}
     expected.update(run.docs.values())
-    blockers = blocking_findings(run)
-    if run.any_failed or not run.files or any(not file.written for file in run.files):
-        blockers.append(Message("error", "sharing_incomplete", "sharing requires every discovered table to succeed"))
-    # Skips may conceal a sensitive input or an unsupported portion of a dataset.
-    if run.skipped:
-        blockers.append(Message("error", "sharing_skipped_inputs", "sharing requires an explicitly selected input with no skipped files",
-                                fix="select a supported input set explicitly and regenerate"))
+    if all_or_nothing:
+        blockers = blocking_findings(run)
+        if run.any_failed or not run.files or any(not file.written for file in run.files):
+            blockers.append(Message("error", "sharing_incomplete",
+                                    "--all-or-nothing: an input file was not written, so none is"))
+        # Skips may conceal a sensitive input or an unsupported portion of a dataset.
+        if run.skipped:
+            blockers.append(Message("error", "sharing_skipped_inputs",
+                                    "--all-or-nothing: an input file was skipped, so none is written",
+                                    fix="select a supported input set explicitly and regenerate"))
+    else:
+        blockers = [message for message in _blocking(run.messages) if _blocks_partial(message, run, settings)]
+        # every written file was cleared by withhold_blocked; a finding added since withholds everything
+        blockers += _blocking(message for file in run.files if file.written for message in file.all_messages())
+        if not any(file.written for file in run.files):
+            blockers.append(Message("error", "sharing_nothing_written",
+                                    "no input file could be written to the output folder"))
     findings, hashes = inventory(stage, expected)
     blockers.extend(findings)
     evidence: dict[str, Any] = {
@@ -135,20 +220,30 @@ def finish(run: Any, destination: Path, stage: Path) -> dict[str, Any]:
     }
     if blockers:
         run.messages.extend(message for message in blockers if message not in run.messages)
-        run.messages.append(Message("error", "sharing_package_blocked", "sharing package was withheld; review the local report and regenerate"))
+        run.messages.append(Message("error", "sharing_package_blocked",
+                                    "nothing was written to the output folder; see the report's failures and run again"))
         for file in run.files:
-            file.fail("sharing package withheld because release gates did not pass")
+            if not file.failed:
+                file.fail("not written to the output folder: a run-level problem withheld every file")
         run.docs = {}
         return evidence
     check_fresh_destination(destination)
     if is_within(destination, stage) or is_within(stage, destination):
         raise UsageError("sharing staging and output must not overlap")
     destination.parent.mkdir(parents=True, exist_ok=True)
+    emptied = os.path.lexists(destination)
+    if emptied:
+        os.rmdir(destination)  # checked empty just above; rmdir refuses anything else
     # Reports and stage use the same filesystem as the destination in typical
     # runs. Cross-device promotion refuses rather than exposing a partial copy.
-    os.rename(stage, destination)
+    try:
+        os.rename(stage, destination)
+    except OSError:
+        if emptied:
+            destination.mkdir(exist_ok=True)  # the user's empty folder is left as it was
+        raise
     evidence["released"] = True
     return evidence
 
 
-__all__ = ["check_fresh_destination", "create_staging", "inventory", "finish"]
+__all__ = ["check_fresh_destination", "create_staging", "withhold_blocked", "inventory", "finish"]

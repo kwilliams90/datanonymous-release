@@ -12,7 +12,8 @@ area are passed to that area's hook. Column flags are repeatable (no comma
 lists) and accept ``path::COL`` / ``book.xlsx::Sheet::COL`` qualifiers.
 
 Exit codes: 0 every tabular file written (PASS or WARN); 1 unexpected error;
-2 usage/config error; 3 one or more files FAILED (not written).
+2 usage/config error; 3 one or more files FAILED (not written; in sharing mode the
+others are still written unless ``--all-or-nothing``).
 Logging goes to stderr; stdout carries the summary (or JSON with ``--json``).
 Console output is ASCII only.
 """
@@ -186,10 +187,16 @@ def main() -> None:
 @main.command("run")
 @click.argument("input", type=click.Path(path_type=Path))
 @click.option("--out-dir", "out_dir", required=True, type=click.Path(file_okay=False, path_type=Path),
-              help="Folder for the synthetic files (+ README, DATA_DICTIONARY, schema).")
+              help="Folder for the synthetic files (+ README, DATA_DICTIONARY, schema). Must be a new or empty "
+                   "folder outside the input and the report folder (it is created if missing).")
 @click.option("--report-dir", "report_dir", default=None, type=click.Path(file_okay=False, path_type=Path),
-              help="Folder for the report (default: <out-dir>-report).")
-@click.option("--force", is_flag=True, default=False, help="Write into non-empty out/report folders.")
+              help="Folder for the report, kept locally (default: <out-dir>-report). A new or empty folder; it may "
+                   "be inside the input.")
+@click.option("--force", is_flag=True, default=False,
+              help="Fidelity mode only: write into non-empty out/report folders.")
+@click.option("--all-or-nothing", "all_or_nothing", is_flag=True, default=False,
+              help="Sharing mode: write nothing unless every input file can be written (default: leave out the "
+                   "files that cannot and list them in <report-dir>/sharing-failures.csv).")
 @click.option("--max-row-matches", type=click.FloatRange(0, 100), default=None, metavar="PCT",
               help="Fail a file whose remaining chance row matches exceed PCT percent.")
 @click.option("--no-strict", is_flag=True, default=False, help="Layout self-check differences only warn.")

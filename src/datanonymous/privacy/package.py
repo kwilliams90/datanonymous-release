@@ -75,19 +75,29 @@ def _unread(run: Any) -> list[str]:
     return [file.rel_path for file in run.files if file.failed and not file.tables]
 
 
-def _flag_may_name_unread(message: Message, run: Any, settings: Any) -> bool:
+def _scopes(settings: Any, code: str) -> list[tuple[str, str | None]]:
+    """(text quoted in a ``code`` message, the input file it is limited to or None) for each option of the run."""
+    if code == "rule_unused":
+        from ..profile.structure import parse_rules
+
+        return [(rule["text"], rule["file"]) for rule in parse_rules(getattr(settings, "rules", None))]
+    from ..config import _KV_COL, _LIST_COL
+
+    refs = [ref for name in _LIST_COL for ref in getattr(settings, name, ())]
+    refs += [ref for name in _KV_COL for ref, _ in getattr(settings, name, ())]
+    return [(ref.raw, ref.file.replace("\\", "/").strip("/") if ref.file else None) for ref in refs]
+
+
+def _may_name_unread(message: Message, run: Any, settings: Any) -> bool:
+    """The unused column option or rule of ``message`` may have been meant for a file that was never read."""
     unread = _unread(run)
     if not unread:
         return False
     if settings is None:
         return True
-    from ..config import _KV_COL, _LIST_COL
-
-    refs = [ref for name in _LIST_COL for ref in getattr(settings, name, ())]
-    refs += [ref for name in _KV_COL for ref, _ in getattr(settings, name, ())]
-    for ref in refs:
-        if repr(ref.raw) in message.text:
-            return ref.file is None or ref.file.replace("\\", "/").strip("/") in unread
+    for text, file in _scopes(settings, message.code):
+        if repr(text) in message.text:
+            return file is None or file in unread
     return True
 
 
@@ -97,10 +107,8 @@ def _blocks_partial(message: Message, run: Any, settings: Any) -> bool:
         return False  # a summary: the files holding the values FAILed and were removed
     if message.code == "leak_scan_incomplete" and "every other file was verified" in message.text:
         return False  # the unverified files FAILed and were removed; a scan that did not complete still blocks
-    if message.code == "unused_column_flag":
-        return not _flag_may_name_unread(message, run, settings)
-    if message.code == "rule_unused":
-        return not _unread(run)
+    if message.code in ("unused_column_flag", "rule_unused"):
+        return not _may_name_unread(message, run, settings)
     return True
 
 

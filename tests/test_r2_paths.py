@@ -237,17 +237,23 @@ def test_report_dir_inside_the_input_is_allowed(tmp_path: Path) -> None:
     check_dirs(src / "data.csv", tmp_path / "out", src / "report", force=False)  # a file input: its folder
 
 
-def test_run_with_the_report_dir_inside_the_input_never_reads_the_report(tmp_path: Path) -> None:
+@pytest.mark.parametrize("mode", ["fidelity", "sharing"])
+def test_a_run_never_reads_its_report_dir_inside_the_input(tmp_path: Path, mode: str) -> None:
+    """In sharing mode the staging folder already sits in the report dir while the input is walked."""
     src = _input(tmp_path)
-    for _ in range(2):  # the second run finds the first run's report in the input and skips it
-        res = run_cli(src, "--out-dir", tmp_path / "out", "--report-dir", src / "report", "--force", "--seed", "1")
-        assert res.exit_code == 0, res.output
-    assert (src / "report" / "report.json").is_file()
-    assert sorted(p.name for p in (tmp_path / "out").iterdir()
-                  if p.suffix == ".csv" or p.is_dir()) == ["data.csv"]
+    run_cli(src, "--out-dir", tmp_path / "out", "--report-dir", src / "report", "--mode", mode, "--seed", "1")
     report = json.loads((src / "report" / "report.json").read_text(encoding="utf-8"))
     assert [f["source"] for f in report["files"]] == ["data.csv"]
     assert not report["skipped"]
+
+
+def test_a_non_empty_report_dir_inside_the_input_is_refused_even_with_force(tmp_path: Path) -> None:
+    """--force must never let report files replace input files."""
+    src = _input(tmp_path)
+    (src / "reports").mkdir()
+    (src / "reports" / "report.json").write_text('[{"real": 1}]', encoding="utf-8")
+    _refused(tmp_path, src, "--out-dir", tmp_path / "out", "--report-dir", src / "reports", "--force",
+             watch=src, needle="a report folder inside the input must be new or empty")
 
 
 def test_input_inside_the_report_dir_is_still_refused(tmp_path: Path) -> None:

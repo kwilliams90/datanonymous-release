@@ -78,3 +78,27 @@ def test_all_or_nothing_withholds_package_with_skipped_input(tmp_path):
     run = _run(stage)
     run.skipped = [SimpleNamespace(rel_path="unsupported")]
     assert not finish(run, tmp_path / "share", stage, all_or_nothing=True)["released"]
+
+
+def _partial_run(tmp_path, rules):
+    from datanonymous.config import Settings
+    from datanonymous.pipeline import execute
+    from release_corpus import write_corpus
+
+    original = tmp_path / "original"
+    write_corpus(original)
+    (original / "broken.xlsx").write_bytes(b"invented invalid workbook")  # fails before its columns are read
+    return execute(Settings(mode="sharing", seed=573291, rules=rules), original, tmp_path / "out", tmp_path / "rep")
+
+
+def test_an_unused_rule_scoped_to_a_written_table_still_withholds_everything(tmp_path):
+    run = _partial_run(tmp_path, [{"rule": "Nope_A <= Nope_B", "file": "roster.csv"}])
+    assert not run.package["released"]
+    assert "rule_unused" in run.package["blocking_codes"]
+
+
+@pytest.mark.parametrize("scope", [None, "broken.xlsx"])
+def test_an_unused_rule_that_may_be_meant_for_an_unread_table_does_not_block(tmp_path, scope):
+    rule = {"rule": "Nope_A <= Nope_B", **({"file": scope} if scope else {})}
+    run = _partial_run(tmp_path, [rule])
+    assert run.package["released"], run.package["blocking_codes"]

@@ -106,6 +106,10 @@ def check_dirs(input_path: Path, out_dir: Path, report_dir: Path, force: bool, s
         for flag, d, what in dirs:
             # the local report may sit inside the input (the walk skips it); the input inside the report dir may
             # not: report files written there could replace real input files
+            if flag == "--report-dir" and is_within(d, root) and not is_within(root, d) and _non_empty(d):
+                raise UsageError(f"{_named(flag, d)} is inside {label} {root} and already contains files; a report "
+                                 "folder inside the input must be new or empty (--force does not apply: report "
+                                 "files could replace input files)")
             if is_within(d, root) and flag != "--report-dir":
                 raise UsageError(f"{_named(flag, d)} is inside {label} {root}; choose a folder outside it")
             if is_within(root, d):

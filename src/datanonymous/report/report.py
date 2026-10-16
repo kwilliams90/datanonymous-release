@@ -58,9 +58,11 @@ leak scan can check the report before :func:`write_report_files` writes it.
 
 from __future__ import annotations
 
+import csv
 import datetime as _dt
 import functools
 import importlib.metadata as md
+import io
 import json
 import platform
 import re
@@ -945,6 +947,23 @@ def _public_settings(run: RunResult, settings: Settings) -> dict[str, Any]:
     return pub
 
 
+#: sharing mode: the input files not written to the output folder (report folder only: a path can hold a name)
+FAILURES_CSV = "sharing-failures.csv"
+
+
+def failures_csv(run: RunResult) -> str:
+    """One row per input file not written: ``input_path, outcome (failed | skipped), reason``."""
+    buf = io.StringIO()
+    writer = csv.writer(buf, lineterminator="\n")
+    writer.writerow(["input_path", "outcome", "reason"])
+    for fr in run.files:
+        if fr.failed:
+            writer.writerow([fr.rel_path, "failed", "; ".join(dict.fromkeys(fr.reasons))])
+    for s in run.skipped:
+        writer.writerow([s.rel_path, "skipped", s.reason])
+    return buf.getvalue()
+
+
 def build_report(run: RunResult, settings: Settings) -> dict[str, bytes]:
     """Every report-dir file as {posix relative path: bytes}; nothing is written.
 
@@ -972,6 +991,8 @@ def build_report(run: RunResult, settings: Settings) -> dict[str, bytes]:
     if run.data_mode == "sharing":
         manifest["sharing_package"] = run.package
     files["manifest.json"] = _json(manifest).encode("utf-8")
+    if run.data_mode == "sharing" and run.mode == "run":
+        files[FAILURES_CSV] = failures_csv(run).encode("utf-8")
     for fr in run.files:
         base = str(PurePosixPath("files", fr.rel_path))
         files[base + ".json"] = _json(file_json(fr, min_cell)).encode("utf-8")
@@ -1149,6 +1170,10 @@ def console_summary(run: RunResult) -> list[str]:
         lines.append(f"Out dir: {run.out_dir}")
     if run.report_dir is not None:
         lines.append(f"Report: {run.report_dir / 'REPORT.md'}")
+        not_written = sum(1 for fr in run.files if fr.failed) + len(run.skipped)
+        if run.data_mode == "sharing" and not_written:
+            lines.append(f"{not_written} input file(s) were not written to the output folder; "
+                         f"see {run.report_dir / FAILURES_CSV}")
     return [ascii_text(_redact_text(run, x)) for x in lines]
 
 

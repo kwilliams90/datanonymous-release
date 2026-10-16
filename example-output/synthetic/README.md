@@ -4,7 +4,7 @@
 
 ## How it was generated
 
-- Generator: datanonymous 0.1.0rc1 (Faker 40.40.0 pinned), seed 1. The same tool versions, the same input and `--seed 1` reproduce these files byte for byte.
+- Generator: datanonymous 0.1.0rc2 (Faker 40.40.0 pinned), seed 1. The same tool versions, the same input and `--seed 1` reproduce these files byte for byte.
 - Each source file was profiled column by column and replaced by a synthetic copy with the same relative path and file name, the same header text and column order, the same number of rows (N rows in = N rows out) and the same file layout (encoding, delimiter, quoting, line endings, missing-value tokens).
 - Every non-ID column was generated on its own from the source column's distribution: exact counts for categories, flags and missing-value tokens; interpolated values within the observed range for continuous numbers and dates; invented same-shape values for IDs, names, emails, phone numbers and other personal text; filler text for free text.
 - These docs (README.md, DATA_DICTIONARY.md, schema.json) were computed from the synthetic files only.

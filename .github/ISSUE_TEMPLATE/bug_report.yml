@@ -22,7 +22,7 @@ body:
     attributes:
       label: datanonymous version
       description: Output of `datanonymous --version`.
-      placeholder: datanonymous, version 0.1.0rc1
+      placeholder: datanonymous, version 0.1.0rc2
     validations:
       required: true
 

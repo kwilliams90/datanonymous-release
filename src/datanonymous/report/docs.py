@@ -441,15 +441,23 @@ def _out_format(fmt: str) -> str:
 
 def write_docs(out_dir: Path, written: list[WrittenFile], run_messages: list[Message], seed: int,
                min_cell: int, stale: list[str] | None = None, names: dict[str, str] | None = None,
-               *, mode: str = "fidelity") -> dict[str, str]:
+               *, mode: str = "fidelity", not_written: tuple[int, int] = (0, 0)) -> dict[str, str]:
     """Write README.md, DATA_DICTIONARY.md and schema.json; returns doc kind -> file name.
 
     ``stale``: out-dir relative paths of files left from an earlier run whose
     source FAILed in this run (listed in the README; never deleted). ``names``
-    (doc name -> file name) keeps the names of an earlier write.
+    (doc name -> file name) keeps the names of an earlier write. ``not_written``:
+    (input files not written, input files found), counted in the sharing README.
     """
     files = [(w.result, _tables_of_written(w)) for w in written]
-    return _write(out_dir, files, run_messages, seed, min_cell, stale or [], names, screen_of(run_messages), mode=mode)
+    return _write(out_dir, files, run_messages, seed, min_cell, stale or [], names, screen_of(run_messages), mode=mode,
+                  not_written=not_written)
+
+
+def not_written_count(run: Any) -> tuple[int, int]:
+    """(input files not written, input files found): every FAILed file and every skipped file of the run."""
+    skipped = len(getattr(run, "skipped", ()))  # an older run object may have none
+    return (sum(1 for fr in run.files if fr.failed) + skipped, len(run.files) + skipped)
 
 
 def rewrite_docs(run: Any, min_cell: int) -> dict[str, str]:
@@ -468,12 +476,12 @@ def rewrite_docs(run: Any, min_cell: int) -> dict[str, str]:
         if set(names) != set(DOC_NAMES):
             names = None
     return _write(out_dir, files, [], run.seed, min_cell, stale, names, screen_of(run.messages),
-                  mode=getattr(run, "data_mode", "fidelity"))
+                  mode=getattr(run, "data_mode", "fidelity"), not_written=not_written_count(run))
 
 
 def _write(out_dir: Path, files: list[tuple[FileResult, list[_DocTable]]], run_messages: list[Message], seed: int,
            min_cell: int, stale: list[str], names: dict[str, str] | None, screen: Any = None,
-           *, mode: str = "fidelity") -> dict[str, str]:
+           *, mode: str = "fidelity", not_written: tuple[int, int] = (0, 0)) -> dict[str, str]:
     if names is None:
         # stale outputs (kept from an earlier run, listed in the README) are data files too: never overwritten
         names, msgs = doc_paths([fr.out_rel_path for fr, _ in files] + list(stale))
@@ -550,7 +558,7 @@ def _write(out_dir: Path, files: list[tuple[FileResult, list[_DocTable]]], run_m
                     dd += [f"Ordered levels of {_code(e['name'])} (R): "
                            f"{_code(f'factor(x, levels = c({levels}), ordered = TRUE)')}", ""]
         schema["files"].append(file_entry)
-    readme = _readme(files, seed, names, stale, min_cell, mode=mode)
+    readme = _readme(files, seed, names, stale, min_cell, mode=mode, not_written=not_written)
     out_dir.mkdir(parents=True, exist_ok=True)
     docs = {"README.md": readme.encode("utf-8"), "DATA_DICTIONARY.md": "\n".join(dd).encode("utf-8"),
             "schema.json": (json.dumps(schema, indent=2, ensure_ascii=False) + "\n").encode("utf-8")}
@@ -716,8 +724,12 @@ def _summary(e: dict[str, Any]) -> str:
 
 
 # --------------------------------------------------------------------------- README
-def _sharing_readme(files: list[tuple[FileResult, list[_DocTable]]], names: dict[str, str], min_cell: int) -> str:
-    """Describe the sharing contract without exporting source profiles or reproduction details."""
+def _sharing_readme(files: list[tuple[FileResult, list[_DocTable]]], names: dict[str, str], min_cell: int,
+                    not_written: tuple[int, int] = (0, 0)) -> str:
+    """Describe the sharing contract without exporting source profiles or reproduction details.
+
+    ``not_written`` is counted, never named: an input file name can hold personal data.
+    """
     lines = [
         "# SYNTHETIC DATA", "",
         "> **SYNTHETIC DATA - NOT REAL RECORDS. SHARING MODE.** People, table memberships, and person "
@@ -727,7 +739,7 @@ def _sharing_readme(files: list[tuple[FileResult, list[_DocTable]]], names: dict
         "## How it was generated", "",
         f"- Generator: datanonymous {__version__} (Faker {_faker_version()} pinned), sharing mode.",
         "- Inputs were processed locally. Source reports, source profiles, mappings, assignment information, "
-        "and reproduction settings are excluded from this package.",
+        "and reproduction settings are excluded from this folder.",
         f"- `{names['DATA_DICTIONARY.md']}` and `{names['schema.json']}` describe output values, types, "
         "and formats; their statistics do not describe the original records.", "",
         "## Files", "",
@@ -740,6 +752,11 @@ def _sharing_readme(files: list[tuple[FileResult, list[_DocTable]]], names: dict
             lines.append(f"| {_md(_code(fr.out_rel_path))} | {_out_format(fr.format)} | {rows} | {cols} |")
     else:
         lines.append("No synthetic data file was written in this run.")
+    missing, found = not_written
+    if missing:
+        lines += ["", f"**{missing} of {found} input files were not written** to this folder (they could not be "
+                  "generated safely, or are not supported tables). Fictional keys and joins hold only among "
+                  "the files in this folder."]
     lines += [
         "", "## Sharing contract", "",
         "- Each released table keeps its row total: N output equals N input. Safe paths, headers, column "
@@ -754,8 +771,8 @@ def _sharing_readme(files: list[tuple[FileResult, list[_DocTable]]], names: dict
         "month and academic season are preserved where feasible.",
         "- Row-number IDs 1..n have randomized assignment. Personal-data fields are regenerated; synthetic "
         "phones must not match a source phone anywhere in the run.",
-        "- Privacy warnings and unverified artifacts block release. Only a fresh, validated inventory of "
-        "synthetic data and reviewed documentation belongs in the package.", "",
+        "- An input file with a privacy warning or unverified output is left out of this folder. Only a "
+        "validated inventory of synthetic data and reviewed documentation is written here.", "",
         "## Limits and code use", "",
         "- Fields are generally generated independently. Ordinary correlations, subgroup effects, source "
         "timelines, and original person relationships are not analytical evidence. Only documented "
@@ -767,7 +784,7 @@ def _sharing_readme(files: list[tuple[FileResult, list[_DocTable]]], names: dict
         "releases. Joined indirect identifiers, counts, numeric extremes, metadata, prior copies, agent "
         "transcripts, and other reasonably available information still require disclosure review.",
         "- The institution determines authorized source use, recipients, retention, and whether this exact "
-        "package meets the applicable disclosure standard. Automated checks are technical evidence, "
+        "folder meets the applicable disclosure standard. Automated checks are technical evidence, "
         "not automatic FERPA approval.", "",
     ]
     return "\n".join(lines)
@@ -793,9 +810,10 @@ def _kept_row_numbers(files: list[tuple[FileResult, list[_DocTable]]]) -> list[s
 
 
 def _readme(files: list[tuple[FileResult, list[_DocTable]]], seed: int, names: dict[str, str],
-            stale: list[str], min_cell: int = 10, *, mode: str = "fidelity") -> str:
+            stale: list[str], min_cell: int = 10, *, mode: str = "fidelity",
+            not_written: tuple[int, int] = (0, 0)) -> str:
     if mode == "sharing":
-        return _sharing_readme(files, names, min_cell)
+        return _sharing_readme(files, names, min_cell, not_written)
     kept_ids = _kept_row_numbers(files)
     lines = [
         "# SYNTHETIC DATA",

@@ -4,8 +4,10 @@ Build and test code against synthetic files while the original education
 records stay on your machine. datanonymous preserves useful columns, formats,
 row totals and joins, and creates fictional people and relationships.
 
-Sharing mode is the default. It checks the complete output before making it
-available and refuses inputs it cannot safely support. Synthetic data still
+Sharing mode is the default. It checks every output file before writing it to
+the output folder. Input files it cannot safely support are left out and listed
+in the report folder's `sharing-failures.csv`; pass `--all-or-nothing` to write
+nothing unless every file succeeds. Synthetic data still
 needs review before sharing; a successful run is not FERPA certification.
 
 ## Install
@@ -55,8 +57,8 @@ relationships that sharing mode changes. The checked-in
 ```
 
 Use the column identifying each row's subject, including repeated event rows.
-Keep inputs, output and reports in separate folders; the output folder must
-not already exist.
+The output folder must be new or empty, and outside the input and report
+folders; the report folder stays local and may sit inside the input.
 
 Review the synthetic tables and their data dictionary before sharing them.
 Keep original records, comparison reports and temporary files local. If a run

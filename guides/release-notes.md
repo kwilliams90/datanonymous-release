@@ -1,3 +1,27 @@
+# Release candidate 0.1.0rc2
+
+- Sharing mode leaves out the input files it cannot write safely and writes the
+  rest. The files left out are listed in `sharing-failures.csv` in the report
+  folder (never in the output folder) and counted, without names, in the
+  output's README; the run exits with code 3. `--all-or-nothing` restores the
+  earlier behaviour of writing nothing unless every file succeeds.
+- A key-population refusal in sharing mode (a rare rows-per-person count class,
+  a rare identifier format) now leaves out only the tables it concerns; the
+  other tables are planned again without them, dropping any join to a table
+  left out.
+- Row-number IDs (exactly 1 through n) whose full set belonged to a table that
+  was left out are no longer kept as they are: the kept tables get fictional
+  IDs for them, checked by the leak scan like any other identifier.
+- `--out-dir` may be an existing empty folder; a folder with files in it is
+  refused with a message saying so. The folder itself is kept (a mount point
+  or a folder with its own permissions), and the files are copied into it when
+  it is on another drive.
+- The report folder may sit inside the input; the input scan skips it. It must
+  be new or empty there, even with `--force`, so report files never replace
+  input files.
+- A declared rule or column option that matched nothing still blocks the whole
+  output unless it was meant for a file that could not be read.
+
 # Release candidate 0.1.0rc1
 
 Sharing is now the default workflow. It generates fictional table memberships

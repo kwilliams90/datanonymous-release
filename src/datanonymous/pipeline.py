@@ -741,20 +741,39 @@ def _execute(settings: Settings, input_path: Path, out_dir: Path | None = None, 
     leaks.plan_digit_keys(run.files)  # run-wide real phones/SSNs: no generated value holds one, even by chance
     pseudonyms.plan(run.files, seed)  # D35: one pseudonym per real unit in the run, never a real value of it
     if settings.mode == "sharing":
-        from .generate.population import plan_population
+        from .generate.population import PopulationRefusal, plan_population
 
-        try:
-            plan_population(run.files, seed, settings, reg, namespaces)
-            for fr in run.files:
-                for tp in fr.tables:
-                    if tp.private.extra.get("_sharing_population") is not None:
-                        tp.messages = [message for message in tp.messages if message.code != "id_columns_unrelated"]
-                        for column in tp.columns:
-                            column.messages = [message for message in column.messages if message.code != "id_columns_unrelated"]
-        except DatanonymousError as error:
+        while True:
+            try:
+                plan_population(run.files, seed, settings, reg, namespaces)
+            except PopulationRefusal as refusal:
+                if not settings.all_or_nothing:
+                    # leave the refused tables out and plan the others again (each pass leaves one out)
+                    for fr in run.files:
+                        error = next((e for (path, _), e in refusal.refused.items() if path == fr.rel_path), None)
+                        if error is not None:
+                            fr.fail(error.message, error.fix)
+                    continue
+                error = refusal
+            except DatanonymousError as caught:  # a refusal no table answers for: nothing is planned
+                error = caught
+            else:
+                for fr in run.files:
+                    for t_i, tp in enumerate(fr.tables):
+                        for i, key in namespaces.get((fr.rel_path, t_i), {}).items():
+                            if tp.columns[i].params.get("_identity_mapped") and not reg.namespaces[key].identity:
+                                # row numbers whose roster was left out: real IDs the leak scan checks (every file)
+                                tp.columns[i].params["_identity_mapped"] = False
+                                tp.columns[i].params["id_mapping"] = "synthetic: same shape, never a real ID (D9)"
+                        if tp.private.extra.get("_sharing_population") is not None:
+                            tp.messages = [message for message in tp.messages if message.code != "id_columns_unrelated"]
+                            for column in tp.columns:
+                                column.messages = [message for message in column.messages if message.code != "id_columns_unrelated"]
+                break
             for fr in run.files:
                 if not fr.failed:
                     fr.fail(error.message, error.fix)
+            break
     out_dir.mkdir(parents=True, exist_ok=True)
     written: list[docs.WrittenFile] = []
     for fr in run.files:
@@ -763,6 +782,11 @@ def _execute(settings: Settings, input_path: Path, out_dir: Path | None = None, 
         w = generate_file(fr, settings, run, reg, namespaces)
         if w is not None:
             written.append(w)
+    if settings.mode == "sharing" and not settings.all_or_nothing:
+        from .privacy import package
+
+        # a file whose findings block sharing is left out before the docs describe the output
+        written = package.withhold_blocked(run, out_dir, written)
     stale_files = stale_outputs(run.files, out_dir)
     for fr in stale_files:
         run.messages.append(Message(
@@ -772,7 +796,8 @@ def _execute(settings: Settings, input_path: Path, out_dir: Path | None = None, 
             + ("; its name or headers hold personal data (D34), so delete it before the out dir is shared"
                if fr.withheld else "")))
     stale = [fr.out_rel_path for fr in stale_files]  # shown paths: a flagged name is redacted (D34)
-    run.docs = docs.write_docs(out_dir, written, run.messages, seed, settings.min_cell, stale, mode=settings.mode)
+    run.docs = docs.write_docs(out_dir, written, run.messages, seed, settings.min_cell, stale, mode=settings.mode,
+                               not_written=docs.not_written_count(run))
     for fr in run.files:
         fr.finalize_status()
     payload = report_mod.build_report(run, settings)
@@ -786,7 +811,8 @@ def _execute(settings: Settings, input_path: Path, out_dir: Path | None = None, 
 
 def execute(settings: Settings, input_path: Path, out_dir: Path | None = None, report_dir: Path | None = None,
             mode: str = "run") -> RunResult:
-    """Sharing releases only a complete verified stage; fidelity retains local workflow."""
+    """Sharing writes the verified files to the output folder and leaves out (and lists in the report folder's
+    sharing-failures.csv) the ones that cannot be written safely; fidelity retains local workflow."""
     validate(settings)
     if settings.mode != "sharing" or mode != "run":
         return _execute(settings, input_path, out_dir, report_dir, mode)
@@ -798,18 +824,18 @@ def execute(settings: Settings, input_path: Path, out_dir: Path | None = None, r
     local_report = Path(report_dir) if report_dir is not None else default_report_dir(destination)
     if not Path(input_path).exists():
         raise UsageError(f"input not found: {input_path}")
-    check_dirs(Path(input_path), destination, local_report, False)
+    check_dirs(Path(input_path), destination, local_report, False, sharing=True)
     package.check_fresh_destination(destination)
     stage = package.create_staging(local_report)
     run = _execute(settings, input_path, stage, local_report, mode, _dirs_checked=True)
     try:
-        run.package = package.finish(run, destination, stage)
+        run.package = package.finish(run, destination, stage, settings.all_or_nothing, settings)
     except (OSError, UsageError):
         run.package = {"mode": "sharing", "released": False, "blocking_codes": ["sharing_promotion"]}
-        run.messages.append(Message("error", "sharing_promotion", "sharing package could not be promoted to a fresh destination",
-                                    fix="choose a fresh output on the same filesystem as the local report"))
+        run.messages.append(Message("error", "sharing_promotion", "the output could not be moved into the output folder, so nothing was written to it",
+                                    fix="choose a new or empty output folder on the same drive as the report folder"))
         for fr in run.files:
-            fr.fail("sharing package could not be promoted")
+            fr.fail("not written: the output could not be moved into the output folder")
         run.docs = {}
     run.out_dir = destination
     report_mod.write_report_files(local_report, report_mod.build_report(run, settings))

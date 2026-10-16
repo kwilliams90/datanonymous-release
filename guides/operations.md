@@ -7,7 +7,7 @@ Run datanonymous inside the authorized local environment and give coding agents 
 1. Confirm authorized source access and identify the institution's disclosure decision owner, intended coding task, and proposed recipient. Determine applicable state, local, and IDEA requirements with the institution's responsible staff. Provider terms, permitted use, redisclosure, retention, and deletion belong to that deployment. [Department of Education third-party provider guidance](https://studentprivacy.ed.gov/sites/default/files/resource_document/file/Vendor%20FAQ.pdf)
 2. Inventory the source tables, workbook sheets, formats, identifiers, secondary person relationships, keys, dates, sensitive categories, and paths. Review `inspect` results locally. Use `--person-id` to identify the subject's key when inference is ambiguous; no recognized ID does not mean no people are present. Sharing refuses forced copying overrides such as `--org-code`; resolve classification without weakening the sharing policy.
 3. Review filenames, directory names, headers, sheet names, title rows, and metadata for identifying content. Reshape or safely rename identifying schema before generation, recording production-code changes locally. Exclude unsupported artifacts deliberately.
-4. Install and record dependencies before working with records. Verify a representative offline run with invented inputs on the intended host. Use separate source, fresh output, and report directories with restricted access; do not place output within the source or reports.
+4. Install and record dependencies before working with records. Verify a representative offline run with invented inputs on the intended host. Use separate source, output, and report directories with restricted access; the output folder must be new or empty and never within the source or reports.
 
 For an invented-input trial, the existing command is:
 
@@ -16,11 +16,11 @@ datanonymous inspect .\invented-input --mode fidelity
 datanonymous .\invented-input --mode fidelity --out-dir .\trial-output --report-dir .\private-trial-report
 ```
 
-These commands exercise fidelity on invented records. For source-derived work use the default sharing mode, a fresh output path, and the supported person and join contracts. Review the installed release's help and evidence. Do not bypass a privacy refusal by switching modes.
+These commands exercise fidelity on invented records. For source-derived work use the default sharing mode, a new or empty output folder, and the supported person and join contracts. Review the installed release's help and evidence. Do not bypass a privacy refusal by switching modes.
 
 ## Review and transfer
 
-Treat failures, incomplete directories, and unresolved privacy warnings as blocked release. Review other warnings against their utility criteria. Inspect every proposed artifact, including its metadata and documentation, and resolve skipped files. Validate intended readers, types, leading zeros, row totals, fictional joins, composite uniqueness, dates, and production handling of categories absent from the copy.
+Files that fail or carry unresolved privacy warnings are left out of the output folder and listed in the report folder's `sharing-failures.csv`; review that list (it can name real files, so keep it local) and decide whether the remaining files are enough, or run with `--all-or-nothing` to require every file. Review other warnings against their utility criteria. Inspect every proposed artifact, including its metadata and documentation, and resolve skipped files. Validate intended readers, types, leading zeros, row totals, fictional joins, composite uniqueness, dates, and production handling of categories absent from the copy.
 
 Assess direct and partial linkage, donor counts, rare membership, relationships, extrema, and joined fields with relevant public information and earlier releases. Keep source comparison reports local even if their direct identifiers are redacted: source-derived aggregates can disclose facts. The tool does not perform a combined-release review.
 

@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import csv
+import errno
 import json
+import os
+import shutil
 from collections import Counter
 from pathlib import Path
 
@@ -124,6 +127,37 @@ def test_default_cli_actually_uses_sharing_without_compatibility_helper(tmp_path
     assert evidence["released"] and not evidence["blocking_codes"]
 
 
+def _cli(*args):
+    return CliRunner().invoke(main, [str(a) for a in args], catch_exceptions=False)
+
+
+def test_cli_writes_the_other_tables_exits_3_and_points_to_the_failure_log(tmp_path):
+    original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
+    write_corpus(original)
+    (original / "broken.xlsx").write_bytes(b"invented invalid workbook")
+    result = _cli(original, "--out-dir", output, "--report-dir", report, "--seed", "573291")
+    assert result.exit_code == 3, result.output
+    assert set(hash_inventory(output)) == {*corpus_rows(), *DOCS}
+    assert "1 input file(s) were not written to the output folder" in result.output
+    assert "sharing-failures.csv" in result.output
+
+
+def test_cli_all_or_nothing_writes_nothing_when_one_table_fails(tmp_path):
+    original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
+    write_corpus(original)
+    (original / "broken.xlsx").write_bytes(b"invented invalid workbook")
+    result = _cli(original, "--out-dir", output, "--report-dir", report, "--seed", "573291", "--all-or-nothing")
+    assert result.exit_code == 3, result.output
+    assert not output.exists()
+    assert "nothing was written to the output folder" in result.output
+
+
+def test_cli_help_says_the_out_dir_must_be_new_or_empty():
+    text = " ".join(_cli("run", "--help").output.split())
+    assert "--out-dir" in text and "new or empty folder" in text
+    assert "--all-or-nothing" in text
+
+
 def test_source_relabeling_and_row_reversal_do_not_change_fictional_relationships(tmp_path, canonical_release):
     _, first_output, _, first = canonical_release
     assert first.package["released"], _diagnostic(first)
@@ -155,20 +189,121 @@ def test_rare_iep_vocabulary_cannot_borrow_common_roster_holders(tmp_path):
     fact_holders = {r["Student_ID"] for r in read_records(original / "iep.csv")
                     if r["Support_Program"] == RARE_VOCABULARY}
     assert len(roster_holders) == 60 and len(fact_holders) == 1
-    if run.package["released"]:
+    assert run.package["released"], _diagnostic(run)
+    if (output / "iep.csv").exists():
         assert RARE_VOCABULARY not in {r["Support_Program"] for r in read_records(output / "iep.csv")}
-    else:
-        assert not output.exists()
-        assert any("rare" in m.text or "distinct people" in m.text for m in blocking_findings(run)), _diagnostic(run)
+    else:  # the fact table is left out on its own; the roster's common holders do not rescue it
+        iep = next(f for f in run.files if f.rel_path == "iep.csv")
+        assert any("rare" in r or "distinct people" in r for r in iep.reasons), iep.reasons
+        assert (output / "roster.csv").exists()
 
 
-@pytest.mark.parametrize("variant, diagnostic", [("thirteen_events", "count class"), ("rare_id", "format class")])
-def test_rare_person_count_and_identifier_shape_refuse_the_whole_release(tmp_path, variant, diagnostic):
-    _, output, report, run = _execute(tmp_path, variant)
-    assert not run.package["released"]
-    assert not output.exists() and report.is_dir()
+@pytest.mark.parametrize("variant, diagnostic, refused", [
+    ("thirteen_events", "count class", {"events.csv"}),
+    # the rare ID's holder is in the roster and in discipline; IEP and events refer to the roster
+    ("rare_id", "format class", {"roster.csv", "discipline.csv"}),
+])
+def test_rare_person_count_and_identifier_shape_leave_out_only_the_offending_tables(tmp_path, variant, diagnostic,
+                                                                                    refused):
+    original, output, report, run = _execute(tmp_path, variant)
+    assert run.package["released"], _diagnostic(run)
+    assert exit_code(run) == 3
+    assert {f.rel_path for f in run.files if not f.written} == refused
+    assert set(hash_inventory(output)) == {*corpus_rows(variant), *DOCS} - refused
+    failures = {r["input_path"]: r for r in _failures(report)}
+    assert set(failures) == refused
+    assert all(diagnostic in r["reason"] for r in failures.values()), failures
+    # the remaining tables keep their rows, invent their keys, and join among themselves only
+    source_ids = {r["Student_ID"] for r in read_records(original / "roster.csv")}
+    written = {name: read_records(output / name) for name in corpus_rows(variant) if name not in refused}
+    for name, rows in written.items():
+        assert len(rows) == len(read_records(original / name))
+        assert not {r["Student_ID"] for r in rows} & source_ids
+    if "roster.csv" in written:
+        relation = {r["Student_ID"]: (r["State_Student_ID"], r["Family_ID"]) for r in written["roster.csv"]}
+        for rows in written.values():
+            assert all(relation[r["Student_ID"]] == (r["State_Student_ID"], r["Family_ID"]) for r in rows)
+
+
+def test_tables_whose_join_target_is_left_out_are_planned_without_that_join(tmp_path):
+    # rare_id: the roster (the rare ID's holder) is left out. IEP and events join to it, so each keeps its rows and
+    # is planned over the IDs the remaining tables hold, whose format class no longer includes the rare holder's.
+    _, output, _, run = _execute(tmp_path, "rare_id")
+    assert run.package["released"], _diagnostic(run)
+    for name in ("iep.csv", "events.csv"):
+        fr = next(f for f in run.files if f.rel_path == name)
+        assert "roster.csv" in {link.get("parent", "").split("::")[0]
+                                for t in fr.tables for link in t.structure.cross_file_keys}
+        assert fr.written
+    iep, events = (read_records(output / name) for name in ("iep.csv", "events.csv"))
+    ids = [r["Student_ID"] for r in iep + events]
+    assert len({len(i) for i in ids}) == 1 and not any("-" in i for i in ids)
+    # the joins between the written tables still hold: IEP and events hold the same 120 fictional people
+    assert {r["Student_ID"] for r in iep} == {r["Student_ID"] for r in events}
+    assert len({r["Student_ID"] for r in iep}) == 120
+
+
+def _write_csv(path: Path, rows: list[dict[str, str]]) -> None:
+    with path.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=list(rows[0]), lineterminator="\n")
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def test_row_numbers_left_without_their_roster_are_not_kept_as_row_numbers(tmp_path):
+    # The roster's Student_ID is the row numbers 1..100 (kept as they are, D9); its rare State_Student_ID format
+    # leaves it out. The child's 31..50 are not row numbers on their own: they get fictional IDs that are no real ID
+    # of the run, and the left-out roster's 1..100 range does not show through.
+    original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
+    original.mkdir()
+    state = [f"T{720007 + i * 41:06d}" for i in range(100)]
+    state[0] = "XX-901234"
+    _write_csv(original / "roster.csv", [
+        {"Student_ID": str(i + 1), "State_Student_ID": state[i], "Grade": str(6 + i % 4),
+         "Score": f"{(5500 + (i * 71) % 3500) / 100:.2f}"} for i in range(100)])
+    child_ids = [str(i + 1) for i in range(30, 50)]
+    _write_csv(original / "services.csv", [
+        {"Student_ID": child_ids[j], "Frequency": ("Weekly", "Monthly")[j % 2],
+         "Minutes": f"{(1500 + (j * 137) % 9000) / 100:.2f}"} for j in range(20)])
+    run = execute(Settings(mode="sharing", seed=573291), original, output, report)
+    assert run.package["released"], _diagnostic(run)
+    assert {f.rel_path for f in run.files if not f.written} == {"roster.csv"}
+    assert any("format class" in r for r in next(f for f in run.files if f.rel_path == "roster.csv").reasons)
+    ids = [r["Student_ID"] for r in read_records(output / "services.csv")]
+    assert len(set(ids)) == 20
+    assert not set(ids) & set(child_ids)
+    assert not set(ids) & {str(i) for i in range(1, 101)}
+    # the leak scan does not skip the column as kept row numbers, whichever file it reads it from
+    for fr in run.files:
+        for tp in fr.tables:
+            column = next(p for p in tp.columns if p.name == "Student_ID")
+            assert not column.params.get("_identity_mapped"), fr.rel_path
+            assert not str(column.params.get("id_mapping", "")).startswith("kept"), fr.rel_path
+
+
+def test_all_or_nothing_withholds_every_table_when_the_population_refuses_one(tmp_path):
+    original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
+    write_corpus(original, "thirteen_events")
+    run = execute(Settings(mode="sharing", seed=573291, all_or_nothing=True), original, output, report)
+    assert not run.package["released"] and not output.exists()
     assert all(not f.written for f in run.files)
-    assert any(diagnostic in m.text for m in blocking_findings(run)), _diagnostic(run)
+    assert exit_code(run) == 3
+    assert any("count class" in m.text for m in blocking_findings(run)), _diagnostic(run)
+
+
+def test_a_population_refusal_that_names_no_table_withholds_every_table(tmp_path, monkeypatch):
+    from datanonymous.errors import UnsupportedColumnError
+    from datanonymous.generate import population
+
+    def refuse(*args, **kwargs):
+        raise UnsupportedColumnError("sharing population: invented run-level refusal")
+
+    monkeypatch.setattr(population, "_mint", refuse)
+    _, output, report, run = _execute(tmp_path)
+    assert not run.package["released"] and not output.exists()
+    assert all(not f.written for f in run.files)
+    assert sorted(r["input_path"] for r in _failures(report)) == sorted(corpus_rows())
+    assert all("invented run-level refusal" in r["reason"] for r in _failures(report))
 
 
 @pytest.mark.parametrize("column,actors", [
@@ -225,20 +360,156 @@ def test_stale_destination_is_refused_without_touching_existing_evidence(tmp_pat
     stale = output / "stale.csv"
     stale.write_bytes(b"private-stale-evidence\n")
     before = hash_inventory(output)
-    with pytest.raises(UsageError, match="does not yet exist|not empty"):
+    with pytest.raises(UsageError, match="already contains files; .*new or empty folder"):
         execute(Settings(mode="sharing"), original, output, tmp_path / "local-report")
     assert hash_inventory(output) == before
 
 
-def test_partial_input_failure_withholds_other_generated_tables(tmp_path):
+def test_existing_empty_out_dir_receives_the_package(tmp_path):
+    original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
+    write_corpus(original)
+    output.mkdir()
+    run = execute(Settings(mode="sharing", seed=573291), original, output, report)
+    assert run.package["released"], _diagnostic(run)
+    assert exit_code(run) == 0
+    assert set(hash_inventory(output)) == {*corpus_rows(), "README.md", "DATA_DICTIONARY.md", "schema.json"}
+    assert not list(report.glob(".sharing-staging-*"))
+
+
+def test_an_existing_empty_out_dir_is_kept_not_replaced(tmp_path):
+    """A mount point, or a folder whose parent is read-only, cannot be removed; its permissions must stay."""
+    original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
+    write_corpus(original)
+    output.mkdir()
+    before = os.stat(output)
+    run = execute(Settings(mode="sharing", seed=573291), original, output, report)
+    assert run.package["released"], _diagnostic(run)
+    assert os.path.samestat(before, os.stat(output))
+    assert set(hash_inventory(output)) == {*corpus_rows(), *DOCS}
+
+
+def _cross_device_into(monkeypatch, output):
+    """os.rename into ``output`` fails as it does across drives or mounts."""
+    real = os.rename
+
+    def rename(src, dst):
+        if Path(dst).parent == output:
+            raise OSError(errno.EXDEV, "Invalid cross-device link")
+        return real(src, dst)
+
+    monkeypatch.setattr(os, "rename", rename)
+
+
+def test_an_existing_out_dir_on_another_drive_receives_copies(tmp_path, monkeypatch):
+    original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
+    write_corpus(original)
+    output.mkdir()
+    _cross_device_into(monkeypatch, output)
+    run = execute(Settings(mode="sharing", seed=573291), original, output, report)
+    assert run.package["released"], _diagnostic(run)
+    assert run.package["inventory_sha256"] == hash_inventory(output)
+    assert not list(report.glob(".sharing-staging-*"))
+
+
+def test_a_copy_that_fails_partway_leaves_the_out_dir_empty(tmp_path, monkeypatch):
+    original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
+    write_corpus(original)
+    output.mkdir()
+    _cross_device_into(monkeypatch, output)
+    real, calls = shutil.copy2, []
+
+    def copy2(src, dst, **kw):
+        calls.append(dst)
+        if len(calls) == 2:
+            raise OSError(errno.ENOSPC, "No space left on device")
+        return real(src, dst, **kw)
+
+    monkeypatch.setattr(shutil, "copy2", copy2)
+    run = execute(Settings(mode="sharing", seed=573291), original, output, report)
+    assert not run.package["released"]
+    assert "sharing_promotion" in run.package["blocking_codes"]
+    assert output.is_dir() and not any(output.iterdir())
+    assert exit_code(run) == 3
+
+
+def _failures(report: Path) -> list[dict[str, str]]:
+    with (report / "sharing-failures.csv").open(encoding="utf-8", newline="") as stream:
+        return list(csv.DictReader(stream))
+
+
+DOCS = {"README.md", "DATA_DICTIONARY.md", "schema.json"}
+
+
+def test_a_broken_table_is_left_out_and_the_others_are_written(tmp_path):
     original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
     write_corpus(original)
     (original / "broken.xlsx").write_bytes(b"invented invalid workbook")
     run = execute(Settings(mode="sharing", seed=573291), original, output, report)
+    assert run.package["released"], _diagnostic(run)
+    assert exit_code(run) == 3
+    assert set(hash_inventory(output)) == {*corpus_rows(), *DOCS}
+    assert run.package["inventory_sha256"] == hash_inventory(output)
+    assert not list(report.glob(".sharing-staging-*"))
+    rows = _failures(report)
+    assert [(r["input_path"], r["outcome"]) for r in rows] == [("broken.xlsx", "failed")]
+    assert rows[0]["reason"]
+    readme = (output / "README.md").read_text(encoding="utf-8")
+    assert f"1 of {len(corpus_rows()) + 1} input files were not written" in readme
+    assert "joins hold only among the files in this folder" in readme
+    assert "broken" not in readme
+
+
+def test_skipped_inputs_are_logged_and_do_not_block(tmp_path):
+    original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
+    write_corpus(original)
+    (original / "notes.docx").write_bytes(b"invented notes")
+    run = execute(Settings(mode="sharing", seed=573291), original, output, report)
+    assert run.package["released"], _diagnostic(run)
+    assert exit_code(run) == 0
+    assert set(hash_inventory(output)) == {*corpus_rows(), *DOCS}
+    assert [(r["input_path"], r["outcome"]) for r in _failures(report)] == [("notes.docx", "skipped")]
+    assert f"1 of {len(corpus_rows()) + 1} input files were not written" in (output / "README.md").read_text(
+        encoding="utf-8")
+
+
+def test_a_complete_run_logs_no_failures_and_says_nothing_was_left_out(canonical_release):
+    _, output, report, _ = canonical_release
+    assert _failures(report) == []
+    assert "were not written" not in (output / "README.md").read_text(encoding="utf-8")
+
+
+def test_when_every_table_fails_nothing_is_written_and_an_empty_out_dir_stays_empty(tmp_path):
+    original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
+    write_corpus(original, "thirteen_events")
+    for name in set(corpus_rows()) - {"events.csv"}:
+        (original / name).unlink()
+    output.mkdir()
+    run = execute(Settings(mode="sharing", seed=573291), original, output, report)
+    assert not run.package["released"]
+    assert exit_code(run) == 3
+    assert output.is_dir() and not any(output.iterdir())
+    assert [r["input_path"] for r in _failures(report)] == ["events.csv"]
+
+
+def test_all_or_nothing_withholds_every_table_when_one_fails(tmp_path):
+    original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
+    write_corpus(original)
+    (original / "broken.xlsx").write_bytes(b"invented invalid workbook")
+    run = execute(Settings(mode="sharing", seed=573291, all_or_nothing=True), original, output, report)
     assert not run.package["released"] and not output.exists()
     assert "sharing_incomplete" in run.package["blocking_codes"]
     assert all(not f.written for f in run.files)
-    assert any(any(path.glob("*.csv")) for path in report.glob(".sharing-staging-*"))
+    assert exit_code(run) == 3
+    assert "broken.xlsx" in {r["input_path"] for r in _failures(report)}
+
+
+def test_all_or_nothing_withholds_every_table_when_an_input_is_skipped(tmp_path):
+    original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
+    write_corpus(original)
+    (original / "notes.docx").write_bytes(b"invented notes")
+    run = execute(Settings(mode="sharing", seed=573291, all_or_nothing=True), original, output, report)
+    assert not run.package["released"] and not output.exists()
+    assert "sharing_skipped_inputs" in run.package["blocking_codes"]
 
 
 def test_foreign_staging_artifact_blocks_promotion(tmp_path, monkeypatch):
@@ -255,8 +526,13 @@ def test_foreign_staging_artifact_blocks_promotion(tmp_path, monkeypatch):
     assert run.package["inventory_sha256"] == {}
 
 
-def test_saturated_categorical_only_package_is_still_refused(tmp_path):
-    _, output, _, run = _execute(tmp_path, "categorical_only")
-    assert not run.package["released"] and not output.exists()
-    assert "row_matches_report_only" in run.package["blocking_codes"]
-    assert all(not f.written for f in run.files)
+def test_saturated_categorical_only_tables_are_still_refused(tmp_path):
+    _, output, report, run = _execute(tmp_path, "categorical_only")
+    refused = {f.rel_path for f in run.files
+               if any(m.code == "row_matches_report_only" for m in f.all_messages())}
+    assert refused
+    assert all(not f.written for f in run.files if f.rel_path in refused)
+    assert run.package["released"], _diagnostic(run)
+    assert not refused & set(hash_inventory(output))
+    assert refused <= {r["input_path"] for r in _failures(report)}
+    assert exit_code(run) == 3

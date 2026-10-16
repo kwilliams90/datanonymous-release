@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import csv
+import errno
 import json
+import os
+import shutil
 from collections import Counter
 from pathlib import Path
 
@@ -371,6 +374,62 @@ def test_existing_empty_out_dir_receives_the_package(tmp_path):
     assert exit_code(run) == 0
     assert set(hash_inventory(output)) == {*corpus_rows(), "README.md", "DATA_DICTIONARY.md", "schema.json"}
     assert not list(report.glob(".sharing-staging-*"))
+
+
+def test_an_existing_empty_out_dir_is_kept_not_replaced(tmp_path):
+    """A mount point, or a folder whose parent is read-only, cannot be removed; its permissions must stay."""
+    original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
+    write_corpus(original)
+    output.mkdir()
+    before = os.stat(output)
+    run = execute(Settings(mode="sharing", seed=573291), original, output, report)
+    assert run.package["released"], _diagnostic(run)
+    assert os.path.samestat(before, os.stat(output))
+    assert set(hash_inventory(output)) == {*corpus_rows(), *DOCS}
+
+
+def _cross_device_into(monkeypatch, output):
+    """os.rename into ``output`` fails as it does across drives or mounts."""
+    real = os.rename
+
+    def rename(src, dst):
+        if Path(dst).parent == output:
+            raise OSError(errno.EXDEV, "Invalid cross-device link")
+        return real(src, dst)
+
+    monkeypatch.setattr(os, "rename", rename)
+
+
+def test_an_existing_out_dir_on_another_drive_receives_copies(tmp_path, monkeypatch):
+    original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
+    write_corpus(original)
+    output.mkdir()
+    _cross_device_into(monkeypatch, output)
+    run = execute(Settings(mode="sharing", seed=573291), original, output, report)
+    assert run.package["released"], _diagnostic(run)
+    assert run.package["inventory_sha256"] == hash_inventory(output)
+    assert not list(report.glob(".sharing-staging-*"))
+
+
+def test_a_copy_that_fails_partway_leaves_the_out_dir_empty(tmp_path, monkeypatch):
+    original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
+    write_corpus(original)
+    output.mkdir()
+    _cross_device_into(monkeypatch, output)
+    real, calls = shutil.copy2, []
+
+    def copy2(src, dst, **kw):
+        calls.append(dst)
+        if len(calls) == 2:
+            raise OSError(errno.ENOSPC, "No space left on device")
+        return real(src, dst, **kw)
+
+    monkeypatch.setattr(shutil, "copy2", copy2)
+    run = execute(Settings(mode="sharing", seed=573291), original, output, report)
+    assert not run.package["released"]
+    assert "sharing_promotion" in run.package["blocking_codes"]
+    assert output.is_dir() and not any(output.iterdir())
+    assert exit_code(run) == 3
 
 
 def _failures(report: Path) -> list[dict[str, str]]:

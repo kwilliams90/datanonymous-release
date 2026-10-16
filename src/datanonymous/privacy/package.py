@@ -7,9 +7,11 @@ withholds everything. ``all_or_nothing`` writes nothing unless every input file 
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import os
 from pathlib import Path
+import shutil
 import tempfile
 from typing import Any
 import zipfile
@@ -238,20 +240,47 @@ def finish(run: Any, destination: Path, stage: Path, all_or_nothing: bool = Fals
     check_fresh_destination(destination)
     if is_within(destination, stage) or is_within(stage, destination):
         raise UsageError("sharing staging and output must not overlap")
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    emptied = os.path.lexists(destination)
-    if emptied:
-        os.rmdir(destination)  # checked empty just above; rmdir refuses anything else
-    # Reports and stage use the same filesystem as the destination in typical
-    # runs. Cross-device promotion refuses rather than exposing a partial copy.
-    try:
+    if os.path.lexists(destination):
+        _move_into(stage, destination)
+    else:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        # Reports and stage use the same filesystem as the destination in typical
+        # runs. Cross-device promotion refuses rather than exposing a partial copy.
         os.rename(stage, destination)
-    except OSError:
-        if emptied:
-            destination.mkdir(exist_ok=True)  # the user's empty folder is left as it was
-        raise
     evidence["released"] = True
     return evidence
+
+
+def _move_into(stage: Path, destination: Path) -> None:
+    """Move the staged entries into the existing empty ``destination``, which is kept as it is (a mount point, a
+    folder whose parent is read-only, its permissions and ACLs). An entry that cannot be renamed there (another
+    drive or mount) is copied. On any failure the entries already placed are taken back out, so ``destination``
+    is left empty and the stage keeps the files."""
+    placed: list[tuple[Path, Path, bool]] = []  # (staged, placed, renamed)
+    try:
+        for name in sorted(os.listdir(stage)):
+            src, dst = stage / name, destination / name
+            if os.path.lexists(dst):  # appeared since the emptiness check: never replaced (POSIX rename would)
+                raise FileExistsError(errno.EEXIST, "the output folder is no longer empty")
+            try:
+                os.rename(src, dst)
+                placed.append((src, dst, True))
+            except OSError:
+                placed.append((src, dst, False))  # before the copy: a partial copy is removed too
+                if src.is_dir():
+                    shutil.copytree(src, dst, copy_function=shutil.copy2)
+                else:
+                    shutil.copy2(src, dst)
+    except BaseException:
+        for src, dst, renamed in reversed(placed):
+            if renamed:
+                os.rename(dst, src)
+            elif dst.is_dir():
+                shutil.rmtree(dst, ignore_errors=True)
+            elif os.path.lexists(dst):
+                os.unlink(dst)
+        raise
+    shutil.rmtree(stage)  # emptied by the renames, or holding the originals of the copies
 
 
 __all__ = ["check_fresh_destination", "create_staging", "withhold_blocked", "inventory", "finish"]

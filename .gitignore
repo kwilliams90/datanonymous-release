@@ -23,8 +23,8 @@ tests/_tmp/
 Thumbs.db
 .DS_Store
 
-# design notes and agent docs stay local (repo = code, examples, usage docs)
-docs/
-CLAUDE.md
+# design notes stay local (repo = code, examples, usage docs, agent skills config)
+docs/*
+!docs/agents/
 AGENTS.md
 .claude/

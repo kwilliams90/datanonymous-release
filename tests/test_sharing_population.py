@@ -8,7 +8,7 @@ from datanonymous.config import Settings
 from datanonymous.detect.ids import normalize_id
 from datanonymous.errors import UnsupportedColumnError
 from datanonymous.generate.ids import IdRegistry
-from datanonymous.generate.population import PLAN_KEY, generation_profile, plan_population
+from datanonymous.generate.population import PLAN_KEY, _fold_widths, generation_profile, plan_population
 from datanonymous.generate.table import GenContext, generate_table
 from datanonymous.model import (ColumnProfile, ColumnType, EntityProfile, FileResult, RawColumn, RawTable,
                                TablePrivate, TableProfile)
@@ -119,11 +119,25 @@ def test_unique_thirteen_event_donor_blocks_before_attaching_any_plan():
     assert PLAN_KEY not in events.tables[0].private.extra
 
 
-@pytest.mark.parametrize("values", [_ids(79) + ["XX-123456"],
-                                   [str(100000 + i) for i in range(79)] + ["9000000"]])
-def test_rare_id_format_or_width_donor_is_refused(values):
-    with pytest.raises(UnsupportedColumnError, match="format class|width class"):
-        _plan([_file("people.csv", {"student_id": values})])
+def test_rare_id_format_donor_is_refused_and_named():
+    with pytest.raises(UnsupportedColumnError, match="column 'student_id'.*format class"):
+        _plan([_file("people.csv", {"student_id": _ids(79) + ["XX-123456"]})])
+
+
+def test_rare_unpadded_id_width_is_folded_into_a_common_width():
+    values = [str(1000 + i) for i in range(70)] + [str(100000 + i) for i in range(12)] + ["9000000", "12345678"]
+    plans, _, _ = _plan([_file("people.csv", {"student_id": values})])
+    out = plans[("people.csv", 0)].id_values[0]
+    assert sorted(Counter(len(v) for v in out).items()) == [(4, 70), (6, 14)]
+    assert not set(out) & set(values)
+
+
+@pytest.mark.parametrize("widths, folded", [({4: 70, 6: 12, 7: 1, 8: 1}, {4: 70, 6: 14}),
+                                            ({4: 3, 5: 3, 6: 40}, {6: 46}),
+                                            ({4: 20, 6: 2, 8: 20}, {4: 20, 8: 22}),
+                                            ({4: 4}, {4: 4})])
+def test_fold_widths(widths, folded):
+    assert _fold_widths(Counter(widths), 10) == Counter(folded)
 
 
 def test_sequential_keys_keep_set_and_shuffle_rows_and_references():

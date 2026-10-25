@@ -1,3 +1,14 @@
+# Release candidate 0.1.0rc3
+
+- A numeric ID column whose IDs differ in length (say 4 to 8 digits) no longer
+  fails in sharing mode when some length is held by fewer than `--min-cell`
+  IDs: those IDs get the nearest length that enough IDs hold.
+- An ID-format refusal in sharing mode names the column.
+- Two warnings that never carry source values no longer keep a file out of
+  the sharing output: `id_width_changed` (fictional IDs needed another number
+  of digits) and `dtype_mismatch` (pandas reads an output column as another
+  type, such as a column blanked with `--null`). They are still reported.
+
 # Release candidate 0.1.0rc2
 
 - Sharing mode leaves out the input files it cannot write safely and writes the

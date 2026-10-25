@@ -14,7 +14,10 @@ from ..model import Message
 from ..model import ColumnType
 
 POLICY_VERSION = "1"
-UTILITY_WARNINGS = frozenset({"fidelity_drift", "extremes_not_emitted", "panel_detected"})
+#: id_width_changed: invented IDs had to take another digit count (never a real ID); dtype_mismatch: pandas reads a
+#: column's output as another dtype (a blanked --null column, say). Both are counts and formats, not source values.
+UTILITY_WARNINGS = frozenset({"fidelity_drift", "extremes_not_emitted", "panel_detected",
+                              "id_width_changed", "dtype_mismatch"})
 
 
 def validate_settings(settings: Any) -> None:

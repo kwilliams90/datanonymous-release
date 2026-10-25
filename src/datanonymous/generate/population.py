@@ -150,7 +150,12 @@ def _table_spec(fr: Any, ti: int, namespaces: dict[int, str], minimum: int) -> _
             _refuse("missing identifiers need a reviewed fictional orphan/missing-key contract")
         cards[col] = len(set(keys[col]))
         if tp.n_rows:
-            shapes[col] = _shape(raw, minimum)
+            try:
+                shapes[col] = _shape(raw, minimum)
+            except UnsupportedColumnError as error:
+                raise UnsupportedColumnError(error.message.replace(
+                    "sharing population: ", f"sharing population: column {tp.columns[col].name!r}: ", 1),
+                    error.fix) from error
     primary = tp.entity.primary
     counts = np.empty(0, dtype=np.int64)
     if primary is not None and tp.n_rows:
@@ -169,6 +174,24 @@ def _table_spec(fr: Any, ti: int, namespaces: dict[int, str], minimum: int) -> _
     return _Table((fr.rel_path, ti), tp, namespaces, shapes, cards, groups, counts, pairs)
 
 
+def _fold_widths(widths: Counter[int], minimum: int) -> Counter[int]:
+    """Give the IDs of each digit width held by fewer than ``minimum`` IDs the nearest held width.
+
+    The rarest width goes first, into its nearest neighbour (the longer on a tie), until every width is
+    common or one is left. A released width then always has ``minimum`` real donors.
+    """
+    out = Counter(widths)
+    while len(out) > 1 and (rare := min((c, w) for w, c in out.items()))[0] < minimum:
+        count, width = rare
+        del out[width]
+        out[min(out, key=lambda w: (abs(w - width), -w))] += count
+    return out
+
+
+def _columns(ns: IdNamespace) -> str:
+    return ", ".join(sorted({repr(name) for _, _, _, name in ns.members})) or repr(ns.key)
+
+
 def _mint(ns: IdNamespace, n: int, minimum: int, seed: int, banned: set[str],
           users: RealUsers, shapes: list[_Shape]) -> np.ndarray:
     """Draw a bag from an aggregate format domain, never from ns.mapping."""
@@ -182,9 +205,12 @@ def _mint(ns: IdNamespace, n: int, minimum: int, seed: int, banned: set[str],
         widths = Counter(len(normalize_id(v)) for v in reps)
         padded = [s.width for s in shapes if s.kind == "integer" and s.width]
         all_padded = all(s.kind == "integer" and s.width for s in shapes)
-        if not all_padded and any(c < minimum for c in widths.values()):
-            _refuse("an unpadded identifier width class has fewer than --min-cell donors")
-        # Padding hides significant width, so no rare original width is retained.
+        if not all_padded:
+            widths = _fold_widths(widths, minimum)
+            if any(c < minimum for c in widths.values()):
+                _refuse(f"identifier column {_columns(ns)} has fewer than --min-cell ({minimum}) IDs")
+        # Padding hides significant width, and a rare unpadded width is folded into a common one, so no rare
+        # original width is retained.
         sizes = ([min(padded)] * n if all_padded else
                  [w for w, count in sorted(widths.items()) for _ in range(count)])
         if len(sizes) != n:

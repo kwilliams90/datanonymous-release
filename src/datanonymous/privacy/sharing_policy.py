@@ -16,8 +16,10 @@ from ..model import ColumnType
 POLICY_VERSION = "1"
 #: id_width_changed: invented IDs had to take another digit count (never a real ID); dtype_mismatch: pandas reads a
 #: column's output as another dtype (a blanked --null column, say). Both are counts and formats, not source values.
+#: factor_overflow (warning level: not personal or free text, which is info): too many labels for a factor, so the
+#: column is written as generated text and no real label is kept; the leak scan still checks it.
 UTILITY_WARNINGS = frozenset({"fidelity_drift", "extremes_not_emitted", "panel_detected",
-                              "id_width_changed", "dtype_mismatch"})
+                              "id_width_changed", "dtype_mismatch", "factor_overflow"})
 
 
 def validate_settings(settings: Any) -> None:

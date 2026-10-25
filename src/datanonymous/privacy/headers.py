@@ -3603,7 +3603,7 @@ def screen_run(run: Any, settings: Any, root: Path, registry: Any = None) -> lis
         path_flags = by_path.get(fr.rel_path, [])
         tflags = [(t_i, f) for t_i, f in table_flags.get(f_i, []) if f.written]
         if path_flags or tflags:
-            reason, fix = _reason(fr, path_flags, tflags)
+            reason, fix = _reason(fr, path_flags, tflags, sharing=getattr(settings, "mode", "") == "sharing")
             fr.fail(reason, fix)
             fr.withheld = True
             n_failed += 1
@@ -3830,7 +3830,8 @@ def _screen_printed(run: Any, settings: Any, screen: NameScreen) -> None:
                     screen.add(part, "message", kinds, "a name quoted in a message", written=False)
 
 
-def _reason(fr: FileResult, path_flags: list[Flag], tflags: list[tuple[int, Flag]]) -> tuple[str, str]:
+def _reason(fr: FileResult, path_flags: list[Flag], tflags: list[tuple[int, Flag]],
+            sharing: bool = False) -> tuple[str, str]:
     """The FAIL reason (locations and kinds, never a name) and the fix of one file."""
     parts: list[str] = []
     for f in path_flags:
@@ -3878,8 +3879,10 @@ def _reason(fr: FileResult, path_flags: list[Flag], tflags: list[tuple[int, Flag
     if titles:
         fix = (fix + "; " if fix else "") + "drop --keep-titles (title/notes rows are then written as placeholders)"
     fix += ((" or reshape the table to one row per person" if cols else "")
-            + "; or skip the file with --exclude-path GLOB; if a flagged name is not personal data, --keep-name "
-              "TEXT keeps it as it is")
+            + "; or skip the file with --exclude-path GLOB")
+    if sharing:  # sharing mode refuses --keep-name
+        return reason, fix
+    fix += "; if a flagged name is not personal data, --keep-name TEXT keeps it as it is"
     if len({f.text for f in path_flags} | {f.text for _, f in tflags}) > 1:
         # D37: a set of sibling names flagged together (a pivot) is kept name by name
         fix += " (one --keep-name per flagged name; a keep_name list in --config keeps a whole set)"

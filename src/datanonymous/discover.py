@@ -316,10 +316,10 @@ def discover(input_path: Path, settings: Settings, avoid: tuple[tuple[str, Path]
                 candidates.append((p, rel))
     for path, rel in candidates:
         if settings.include and not any(_glob_match(rel, g) for g in settings.include):
-            disc.skipped.append(SkippedFile(rel, "not matched by --include"))
+            disc.skipped.append(SkippedFile(rel, "not matched by --include", deselected=True))
             continue
         if any(_glob_match(rel, g) for g in settings.exclude_path):
-            disc.skipped.append(SkippedFile(rel, "excluded by --exclude-path"))
+            disc.skipped.append(SkippedFile(rel, "excluded by --exclude-path", deselected=True))
             continue
         f, s = classify(path, rel)
         if f is not None:

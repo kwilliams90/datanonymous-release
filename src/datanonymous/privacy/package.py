@@ -209,8 +209,9 @@ def finish(run: Any, destination: Path, stage: Path, all_or_nothing: bool = Fals
         if run.any_failed or not run.files or any(not file.written for file in run.files):
             blockers.append(Message("error", "sharing_incomplete",
                                     "--all-or-nothing: an input file was not written, so none is"))
-        # Skips may conceal a sensitive input or an unsupported portion of a dataset.
-        if run.skipped:
+        # Skips may conceal a sensitive input or an unsupported portion of a dataset; a file the selection
+        # (--include / --exclude-path) left out on purpose is not part of the input set.
+        if any(not getattr(skipped, "deselected", False) for skipped in run.skipped):
             blockers.append(Message("error", "sharing_skipped_inputs",
                                     "--all-or-nothing: an input file was skipped, so none is written",
                                     fix="select a supported input set explicitly and regenerate"))

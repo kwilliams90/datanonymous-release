@@ -176,6 +176,7 @@ from __future__ import annotations
 import dataclasses
 import os
 import secrets
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -676,8 +677,13 @@ def generate_file(fr: FileResult, settings: Settings, run: RunResult, reg: IdReg
 
 
 def _execute(settings: Settings, input_path: Path, out_dir: Path | None = None, report_dir: Path | None = None,
-             mode: str = "run", *, _dirs_checked: bool = False) -> RunResult:
-    """Run (``mode='run'``) or inspect (``mode='inspect'``) and return the RunResult."""
+             mode: str = "run", *, _dirs_checked: bool = False,
+             _left_out: dict[str, FileResult] | None = None) -> RunResult:
+    """Run (``mode='run'``) or inspect (``mode='inspect'``) and return the RunResult.
+
+    ``_left_out`` (sharing): files an earlier attempt planned but could not write; they FAIL right after
+    profiling, with the earlier reason, so every plan is made over the files written.
+    """
     input_path = Path(input_path)
     if mode == "run":
         if out_dir is None:
@@ -700,6 +706,10 @@ def _execute(settings: Settings, input_path: Path, out_dir: Path | None = None, 
     for f in disc.files:
         fr = profile_file(f, settings, run)
         if fr is not None:
+            if _left_out and fr.rel_path in _left_out and not fr.failed:
+                earlier = _left_out[fr.rel_path]
+                fr.fail(earlier.reasons[0] if earlier.reasons else "not written in an earlier attempt",
+                        earlier.fixes[0] if earlier.fixes else None)
             run.files.append(fr)
     if disc.files and not run.files:
         run.messages.append(Message("warning", "no_tabular_files", "no supported tabular files found in the input"))
@@ -774,6 +784,7 @@ def _execute(settings: Settings, input_path: Path, out_dir: Path | None = None, 
                 if not fr.failed:
                     fr.fail(error.message, error.fix)
             break
+    planned = {fr.rel_path for fr in run.files if not fr.failed}
     out_dir.mkdir(parents=True, exist_ok=True)
     written: list[docs.WrittenFile] = []
     for fr in run.files:
@@ -787,6 +798,7 @@ def _execute(settings: Settings, input_path: Path, out_dir: Path | None = None, 
 
         # a file whose findings block sharing is left out before the docs describe the output
         written = package.withhold_blocked(run, out_dir, written)
+    run.late_failures = [fr for fr in run.files if fr.failed and fr.rel_path in planned]
     stale_files = stale_outputs(run.files, out_dir)
     for fr in stale_files:
         run.messages.append(Message(
@@ -826,8 +838,29 @@ def execute(settings: Settings, input_path: Path, out_dir: Path | None = None, r
         raise UsageError(f"input not found: {input_path}")
     check_dirs(Path(input_path), destination, local_report, False, sharing=True)
     package.check_fresh_destination(destination)
-    stage = package.create_staging(local_report)
-    run = _execute(settings, input_path, stage, local_report, mode, _dirs_checked=True)
+    left_out: dict[str, FileResult] = {}
+    was_random = False
+    while True:
+        stage = package.create_staging(local_report)
+        run = _execute(settings, input_path, stage, local_report, mode, _dirs_checked=True, _left_out=left_out)
+        if settings.all_or_nothing or not run.late_failures:
+            break
+        # a file left out after planning: plan and write the others again without it (same seed), so no plan
+        # (the row numbers 1..n kept, D9; the real texts it would have written) assumes it was written
+        shutil.rmtree(stage)
+        left_out.update((fr.rel_path, fr) for fr in run.late_failures)
+        if settings.seed is None:
+            settings = dataclasses.replace(settings, seed=run.seed)
+            was_random = True
+    for fr in run.files:
+        # the report keeps what the attempt that generated a file left out found (its reasons and warnings); its
+        # profiles stay this run's, planned over the files written
+        earlier = left_out.get(fr.rel_path)
+        if earlier is not None:
+            fr.reasons, fr.fixes, fr.messages = earlier.reasons, earlier.fixes, earlier.messages
+            for tp, earlier_tp in zip(fr.tables, earlier.tables):
+                tp.messages = earlier_tp.messages
+    run.seed_was_random = run.seed_was_random or was_random
     try:
         run.package = package.finish(run, destination, stage, settings.all_or_nothing, settings)
     except (OSError, UsageError):

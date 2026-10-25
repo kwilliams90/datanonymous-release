@@ -4,10 +4,21 @@
   fails in sharing mode when some length is held by fewer than `--min-cell`
   IDs: those IDs get the nearest length that enough IDs hold.
 - An ID-format refusal in sharing mode names the column.
-- Two warnings that never carry source values no longer keep a file out of
+- Three warnings that never carry source values no longer keep a file out of
   the sharing output: `id_width_changed` (fictional IDs needed another number
-  of digits) and `dtype_mismatch` (pandas reads an output column as another
-  type, such as a column blanked with `--null`). They are still reported.
+  of digits), `dtype_mismatch` (pandas reads an output column as another
+  type, such as a column blanked with `--null`) and `factor_overflow` (a
+  column has too many labels to keep, so it is written as generated text).
+  They are still reported.
+- When a file fails or is held back after the run has been planned (during
+  generation or for its warnings), sharing mode plans and writes the other
+  files again without it. Before, a roster of row numbers 1..n that failed
+  this late still let the other tables keep those real numbers as IDs.
+- `--all-or-nothing` no longer counts the files that `--include` or
+  `--exclude-path` leave out as skipped inputs; an unsupported file in the
+  selection still blocks the output.
+- Sharing mode no longer suggests options it refuses (`--force-factor`,
+  `--org-code`, `--keep-name`).
 
 # Release candidate 0.1.0rc2
 

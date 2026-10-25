@@ -330,7 +330,9 @@ def _value_rules(ctx: DetectContext) -> Detection:
             "warning", "factor_overflow",
             f"{n_levels} distinct values > factor-max {ctx.factor_max}: generated as non-factor text "
             "(real labels not kept)", column=ctx.name,
-            fix=f"--force-factor {ctx.name} (or --org-code {ctx.name}) keeps the real labels"))
+            # sharing mode refuses both options: the real labels are never kept there
+            fix=None if getattr(ctx.settings, "mode", "") == "sharing" else
+            f"--force-factor {ctx.name} (or --org-code {ctx.name}) keeps the real labels"))
     return det
 
 

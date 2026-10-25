@@ -634,6 +634,8 @@ class DiscoveredFile:
 class SkippedFile:
     rel_path: str
     reason: str
+    #: left out on purpose by --include / --exclude-path, not an input the run could not handle
+    deselected: bool = False
 
 
 @dataclass
@@ -721,6 +723,9 @@ class RunResult:
     debug: list[str] = field(default_factory=list)  # tracebacks of internal errors (stderr with -v only)
     data_mode: str = "fidelity"
     package: dict[str, Any] | None = None  # local sharing-package evidence, never part of the released data
+    #: PRIVATE: files planned for writing that FAILed during generation or were withheld after it; sharing runs
+    #: again without them, because every run-wide plan (row-number IDs, real-text excuses) assumed they were written
+    late_failures: list[FileResult] = field(default_factory=list, repr=False, compare=False)
 
     @property
     def any_failed(self) -> bool:

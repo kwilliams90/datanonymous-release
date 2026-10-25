@@ -281,6 +281,63 @@ def test_row_numbers_left_without_their_roster_are_not_kept_as_row_numbers(tmp_p
             assert not str(column.params.get("id_mapping", "")).startswith("kept"), fr.rel_path
 
 
+def _roster_and_services(original: Path) -> None:
+    # invented: the roster's Student_ID is 1..100 (row numbers) and its Parent_Name is another person's attribute,
+    # which fails the roster after population planning; the services table holds 31..50
+    original.mkdir()
+    _write_csv(original / "roster.csv", [{"Student_ID": str(i), "Parent_Name": "Clara Qunon",
+                                          "Score": f"{i * 137 / 100:.2f}"} for i in range(1, 101)])
+    _write_csv(original / "services.csv", [{"Student_ID": str(i), "Hours": f"{i * 137 / 100:.2f}",
+                                            "Cost": f"{i * 243 / 100:.2f}"} for i in range(31, 51)])
+
+
+def test_a_roster_failing_after_planning_does_not_keep_its_row_numbers(tmp_path):
+    original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
+    _roster_and_services(original)
+    run = execute(Settings(mode="sharing", seed=573291), original, output, report)
+    assert run.package["released"], _diagnostic(run)
+    roster = next(f for f in run.files if f.rel_path == "roster.csv")
+    assert not roster.written and any("Parent_Name" in r for r in roster.reasons)
+    ids = [r["Student_ID"] for r in read_records(output / "services.csv")]
+    assert len(set(ids)) == 20
+    assert not set(ids) & {str(i) for i in range(1, 101)}
+    for fr in run.files:
+        for tp in fr.tables:
+            column = next(p for p in tp.columns if p.name == "Student_ID")
+            assert not column.params.get("_identity_mapped"), fr.rel_path
+    assert not any(p.name.startswith(".sharing-staging-") for p in report.iterdir())
+
+
+def test_include_selection_satisfies_all_or_nothing(tmp_path):
+    original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
+    _roster_and_services(original)
+    run = execute(Settings(mode="sharing", seed=573291, include=["services.csv"], all_or_nothing=True),
+                  original, output, report)
+    assert run.package["released"], (_diagnostic(run), run.package)
+    assert (output / "services.csv").is_file() and not (output / "roster.csv").exists()
+
+
+def test_all_or_nothing_still_refuses_an_unsupported_input(tmp_path):
+    original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
+    _roster_and_services(original)
+    (original / "notes.docx").write_bytes(b"not a table")
+    run = execute(Settings(mode="sharing", seed=573291, include=["services.csv", "notes.docx"],
+                           all_or_nothing=True), original, output, report)
+    assert "sharing_skipped_inputs" in run.package["blocking_codes"]
+
+
+def test_too_many_labels_is_written_with_no_option_sharing_refuses(tmp_path):
+    original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
+    original.mkdir()
+    _write_csv(original / "data.csv", [{"student_id": f"S{i:04d}", "category": f"label_{i}"} for i in range(30)])
+    run = execute(Settings(mode="sharing", seed=1), original, output, report)
+    assert run.package["released"], _diagnostic(run)
+    labels = {r["category"] for r in read_records(output / "data.csv")}
+    assert not labels & {f"label_{i}" for i in range(30)}
+    fixes = " ".join(m.fix or "" for f in run.files for m in f.all_messages())
+    assert "--force-factor" not in fixes and "--org-code" not in fixes
+
+
 def test_all_or_nothing_withholds_every_table_when_the_population_refuses_one(tmp_path):
     original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
     write_corpus(original, "thirteen_events")

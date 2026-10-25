@@ -134,6 +134,8 @@ def test_rare_unpadded_id_width_is_folded_into_a_common_width():
 
 @pytest.mark.parametrize("widths, folded", [({4: 70, 6: 12, 7: 1, 8: 1}, {4: 70, 6: 14}),
                                             ({4: 3, 5: 3, 6: 40}, {6: 46}),
+                                            ({4: 6, 5: 6, 6: 40}, {6: 52}),
+                                            ({4: 6, 5: 6}, {4: 6, 5: 6}),
                                             ({4: 20, 6: 2, 8: 20}, {4: 20, 8: 22}),
                                             ({4: 4}, {4: 4})])
 def test_fold_widths(widths, folded):

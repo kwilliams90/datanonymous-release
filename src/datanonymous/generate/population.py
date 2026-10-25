@@ -177,14 +177,15 @@ def _table_spec(fr: Any, ti: int, namespaces: dict[int, str], minimum: int) -> _
 def _fold_widths(widths: Counter[int], minimum: int) -> Counter[int]:
     """Give the IDs of each digit width held by fewer than ``minimum`` IDs the nearest held width.
 
-    The rarest width goes first, into its nearest neighbour (the longer on a tie), until every width is
-    common or one is left. A released width then always has ``minimum`` real donors.
+    Only a width that ``minimum`` real IDs hold on their own receives IDs (the longer on a tie), so a released
+    width always has ``minimum`` real donors; with no such width the counts are returned as they are (refused).
     """
-    out = Counter(widths)
-    while len(out) > 1 and (rare := min((c, w) for w, c in out.items()))[0] < minimum:
-        count, width = rare
-        del out[width]
-        out[min(out, key=lambda w: (abs(w - width), -w))] += count
+    held = [w for w, c in widths.items() if c >= minimum]
+    if not held:
+        return Counter(widths)
+    out: Counter[int] = Counter()
+    for width, count in widths.items():
+        out[width if width in held else min(held, key=lambda w: (abs(w - width), -w))] += count
     return out
 
 

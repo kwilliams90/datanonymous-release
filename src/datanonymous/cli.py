@@ -132,6 +132,27 @@ def common_options(f: Callable[..., Any]) -> Callable[..., Any]:
     return f
 
 
+def run_folders(settings: Any, input_path: Path, out_dir: Path | None, report_dir: Path | None
+                ) -> tuple[Path | None, Path | None]:
+    """The folders a run will write to, as the pipeline resolves them (standing roots, then the report default)."""
+    from . import rundirs
+    from .discover import default_report_dir
+
+    out_dir, report_dir = rundirs.resolve(settings, input_path, out_dir, report_dir)
+    if out_dir is not None and report_dir is None:
+        report_dir = default_report_dir(Path(out_dir))
+    return out_dir, report_dir
+
+
+def destination_lines(out_dir: Path | None, report_dir: Path | None) -> list[str]:
+    """The labelled destinations at the start of a run (issue 19), screened like the other console paths."""
+    from .report.report import PRIVATE_LABEL, SHAREABLE_LABEL
+
+    if out_dir is None or report_dir is None:
+        return []
+    return [_screened(f"{SHAREABLE_LABEL}: {out_dir}"), _screened(f"{PRIVATE_LABEL}: {report_dir}")]
+
+
 def _settings(kw: dict[str, Any]):  # noqa: ANN202
     config, config_files = load_layered_config(kw.get("config_path"))
     cli = dict(kw)
@@ -223,7 +244,11 @@ def run_cmd(input: Path, out_dir: Path | None, report_dir: Path | None, **kw: An
         from .report.report import console_summary, finite_json, redact_console, run_json
 
         settings = _settings(kw)
-        result = pipeline.execute(settings, input, out_dir, report_dir, mode="run")
+        run_out, run_report = run_folders(settings, input, out_dir, report_dir)
+        if not settings.json_output and settings.verbosity >= 0:
+            for line in destination_lines(run_out, run_report):
+                _echo(line)
+        result = pipeline.execute(settings, input, run_out, run_report, mode="run")
         if settings.json_output:
             payload = run_json(result)
             payload["config_files"] = list(settings.config_files)

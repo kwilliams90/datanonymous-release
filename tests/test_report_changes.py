@@ -52,6 +52,21 @@ def _changed(md: str) -> str:
     return _section(md, "What changed")
 
 
+def test_excluding_a_column_in_sharing_mode_still_writes_the_file_and_lists_it_as_a_change(tmp_path):
+    """Issue 26: leaving a column out releases less, so it never costs the file or lands under attention."""
+    result, out, report = _run(tmp_path, "--exclude", "Notes")
+    assert result.exit_code == 0, result.output
+    header = (out / "roster.csv").read_text(encoding="utf-8").splitlines()[0].split(",")
+    assert "Notes" not in header and "Program" in header
+    md = (report / "REPORT.md").read_text(encoding="utf-8")
+    assert "left out by you" in _changed(md)
+    assert "Notes" in _changed(md)
+    assert "Notes" not in _section(md, "What needs attention")
+    assert "withheld_by_findings" not in md
+    for name in ("README.md", "DATA_DICTIONARY.md", "schema.json"):  # the recipient is never told the header
+        assert "Notes" not in (out / name).read_text(encoding="utf-8"), name
+
+
 def test_what_changed_sits_between_generated_and_attention_with_one_plain_line_per_change(tmp_path):
     result, out, report = _run(tmp_path, "--null", "Notes")
     assert result.exit_code == 0, result.output

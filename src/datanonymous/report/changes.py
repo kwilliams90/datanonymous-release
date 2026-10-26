@@ -19,7 +19,7 @@ from .. import messages as catalogue
 from ..model import FileResult
 
 #: change codes that are reported through the table's Nulled columns instead of as a generic message
-_HANDLED = frozenset({"column_nulled_automatically"})
+_HANDLED = frozenset({"column_nulled_automatically", "column_excluded"})
 
 
 def _plural(n: int, one: str, many: str) -> str:
@@ -47,6 +47,10 @@ def file_changes(fr: FileResult, counts: bool = True) -> list[tuple[str | None, 
         for column, kind, count in tp.private.extra.get(CHANGES_KEY) or ():
             out.append((column, _record_text(kind, count, counts)))
         for p in tp.columns:
+            if p.role == "excluded":
+                # the shareable README must not name it: the operator left it out, so its header is not for recipients
+                out.append((p.name, "column left out by you") if counts else (None, "one or more columns are left out of the file"))
+                continue
             if p.role != "null":
                 continue
             if not counts:

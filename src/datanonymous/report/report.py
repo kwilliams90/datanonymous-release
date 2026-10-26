@@ -1068,10 +1068,10 @@ def write_report(run: RunResult, settings: Settings) -> None:
     write_report_files(run.report_dir, build_report(run, settings))
 
 
-def nulled_columns(run: RunResult) -> list[tuple[str, str, bool, str]]:
-    """(file, column, nulled automatically, plain reason) of every Nulled column of the files written: by the
-    operator (``--null``) or by sharing mode (ADR-0001)."""
-    from ..profile.sharing import AUTO_NULL_SOURCE
+def nulled_columns(run: RunResult) -> list[tuple[str, str, bool, str, str]]:
+    """(file, column, nulled automatically, plain reason, alternative or '') of every Nulled column of the files
+    written: by the operator (``--null``) or by sharing mode (ADR-0001)."""
+    from ..profile.sharing import AUTO_NULL_ALTERNATIVE_KEY, AUTO_NULL_SOURCE
 
     out = []
     for fr in run.files:
@@ -1083,7 +1083,7 @@ def nulled_columns(run: RunResult) -> list[tuple[str, str, bool, str]]:
                     continue
                 automatic = p.source == AUTO_NULL_SOURCE
                 reason = p.reason.split(" because ", 1)[1] if automatic and " because " in p.reason else ""
-                out.append((fr.rel_path, p.name, automatic, reason))
+                out.append((fr.rel_path, p.name, automatic, reason, p.params.get(AUTO_NULL_ALTERNATIVE_KEY) or ""))
     return out
 
 
@@ -1191,9 +1191,11 @@ def run_markdown(run: RunResult, data: dict[str, Any]) -> str:
         lines += ["## Nulled columns", "",
                   "Written with their header and position kept and every cell empty; their real values appear "
                   "nowhere in the output.", ""]
-        for file, column, automatic, reason in nulled:
+        for file, column, automatic, reason, alternative in nulled:
             how = (f"nulled automatically because {_md(reason)}" if automatic
                    else "nulled by you (--null)")
+            if alternative:
+                how += f". Instead: {_md(alternative)}"
             lines.append(f"- {code_span(_md(file))} {code_span(column)}: {how}")
         lines.append("")
     notes = [n for n in data.get("notes") or [] if n.get("code") != "extreme_exposure"]

@@ -628,6 +628,9 @@ class DiscoveredFile:
     compression: str | None = None
     notes: list[Message] = field(default_factory=list)
     preflight_error: tuple[str, str | None] | None = None  # (message, fix) -> FAIL before reading
+    #: sharing mode (ADR-0001): table number -> column index -> (plain reason, alternative) of the columns an earlier
+    #: attempt found blocking findings about after generation; they are profiled as Nulled columns
+    auto_null: dict[int, dict[int, tuple[str, str | None]]] = field(default_factory=dict)
 
 
 @dataclass
@@ -728,6 +731,10 @@ class RunResult:
     #: PRIVATE: files planned for writing that FAILed during generation or were withheld after it; sharing runs
     #: again without them, because every run-wide plan (row-number IDs, real-text excuses) assumed they were written
     late_failures: list[FileResult] = field(default_factory=list, repr=False, compare=False)
+    #: PRIVATE: sharing (ADR-0001): file -> table number -> column index -> (plain reason, alternative) of the non-key
+    #: columns whose blocking findings after generation were the file's only ones; sharing runs again with them nulled
+    null_requests: dict[str, dict[int, dict[int, tuple[str, str | None]]]] = field(
+        default_factory=dict, repr=False, compare=False)
 
     @property
     def any_failed(self) -> bool:

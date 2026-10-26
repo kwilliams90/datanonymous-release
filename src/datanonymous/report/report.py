@@ -1201,6 +1201,21 @@ def attention_items(run: RunResult, data: dict[str, Any], markdown: bool = True)
     return items
 
 
+def changed_items(run: RunResult, markdown: bool = True) -> list[tuple[str, str]]:
+    """The deliberate privacy changes of the files written, as (where, plain text) for "What changed". They are not
+    problems: nothing here appears under "What needs attention"."""
+    from .changes import run_changes
+
+    items = []
+    for file, column, text in run_changes(run.files):
+        if markdown:
+            where = code_span(_md(file)) + (f" {code_span(column)}" if column else "")
+            items.append((where, _md(text)))
+        else:
+            items.append((file + (f" {column}" if column else ""), text))
+    return items
+
+
 def _shown_warning(w: dict[str, Any], sharing: bool) -> bool:
     """True when a warning blocks a file in sharing mode: it is listed under "What needs attention", not in the
     Appendix's warnings."""
@@ -1227,8 +1242,12 @@ def run_markdown(run: RunResult, data: dict[str, Any]) -> str:
     for extra in (routine_skip_line(run), deselected_line(run)):
         if extra:
             lines += ["", extra + "."]
-    lines += ["", "<!-- What changed: reserved for the \"What changed\" section (a later ticket fills it); "
-                  "omitted until it has content -->", "", "## What needs attention", ""]
+    changed = changed_items(run)
+    if changed:
+        lines += ["", "## What changed", "", "Deliberate privacy changes, not problems: they are why the synthetic "
+                  "files differ from the source.", ""]
+        lines += [f"- {where}: {text}" for where, text in changed]
+    lines += ["", "## What needs attention", ""]
     items = attention_items(run, data)
     if not items:
         lines += ["Nothing needs attention.", ""]
@@ -1374,6 +1393,10 @@ def console_summary(run: RunResult) -> list[str]:
     for extra in (routine_skip_line(run), deselected_line(run)):
         if extra:
             lines.append(f"  {extra}")
+    changed = changed_items(run, markdown=False)
+    if changed:
+        lines.append("What changed")
+        lines += [f"  {where}: {text}" for where, text in changed]
     lines.append("What needs attention")
     items = attention_items(run, run_json(run), markdown=False)
     if not items:

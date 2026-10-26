@@ -757,6 +757,9 @@ def _sharing_readme(files: list[tuple[FileResult, list[_DocTable]]], names: dict
         lines += ["", f"**{missing} of {found} input files were not written** to this folder (they could not be "
                   "generated safely, or are not supported tables). Fictional keys and joins hold only among "
                   "the files in this folder."]
+    changed = _changed_lines(files)
+    if changed:
+        lines += ["", "## What changed", "", "Deliberate changes that make these files differ from real data:", ""] + changed
     lines += [
         "", "## Sharing contract", "",
         "- Each released table keeps its row total: N output equals N input. Safe paths, headers, column "
@@ -788,6 +791,19 @@ def _sharing_readme(files: list[tuple[FileResult, list[_DocTable]]], names: dict
         "not automatic FERPA approval.", "",
     ]
     return "\n".join(lines)
+
+
+def _changed_lines(files: list[tuple[FileResult, list[_DocTable]]]) -> list[str]:
+    """The transformations visible in the output, one bullet each: no counts, reasons or source facts."""
+    from .changes import file_changes
+
+    out = []
+    for fr, _ in files:
+        if fr.withheld:
+            continue
+        for column, text in file_changes(fr, counts=False):
+            out.append(f"- {_md(_code(fr.out_rel_path))}" + (f" {_md(_code(column))}" if column else "") + f": {text}")
+    return out
 
 
 def _faker_version() -> str:

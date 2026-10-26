@@ -185,7 +185,7 @@ from . import diagnostics, paths
 from .config import Settings, validate
 from .detect import dates as dates_detect
 from .discover import check_dirs, default_report_dir, discover
-from .errors import ColumnRefusal, DatanonymousError, NotTabular, UsageError
+from .errors import ColumnRefusal, DatanonymousError, GenerationError, NotTabular, UsageError
 from .generate import numeric as numeric_gen
 from .generate import pii, pseudonyms
 from .generate.ids import IdRegistry
@@ -505,32 +505,60 @@ def _first_rows(entity_index: np.ndarray | None, n_entities: int) -> np.ndarray 
 
 
 def _request_null_after_refusal(fr: FileResult, settings: Settings, run: RunResult, t_i: int | None,
-                                refusal: ColumnRefusal) -> None:
-    """ADR-0001, a refusal raised while table ``t_i`` of ``fr`` was generated: when its column is not a key, not in a
-    structural relationship and not nulled already, record a null request (``RunResult.null_requests``), so
-    ``execute`` profiles and generates the whole run again with the column nulled, as for a column-scoped finding.
-    Otherwise (or with ``--refuse-unsupported``) nothing is recorded and the file is left out, as before."""
-    if settings.mode != "sharing" or settings.refuse_unsupported or t_i is None:
+                                refusal: GenerationError) -> None:
+    """ADR-0001, a refusal raised while table ``t_i`` of ``fr`` was generated (a :class:`ColumnRefusal`, or another
+    :class:`GenerationError` that names one column): when its column is not a key, not in a structural relationship
+    and not nulled already, record a null request (``RunResult.null_requests``), so ``execute`` profiles and
+    generates the whole run again with the column nulled, as for a column-scoped finding. Otherwise (or with
+    ``--refuse-unsupported``) nothing is recorded and the file is left out, as before."""
+    if settings.mode != "sharing" or settings.refuse_unsupported or t_i is None or not refusal.column:
         return
-    from .profile.sharing import _catalogue_fix, _key_or_related
+    from .profile.sharing import catalogue_fix, key_or_related
 
     tp = fr.tables[t_i]
-    i = refusal.index
-    if not (0 <= i < len(tp.columns)) or tp.columns[i].name != refusal.column:
+    if isinstance(refusal, ColumnRefusal):
+        i, plain = refusal.index, refusal.plain
+        if not (0 <= i < len(tp.columns)) or tp.columns[i].name != refusal.column:
+            return
+    else:
+        hits = [p.index for p in tp.columns if p.name == refusal.column]
+        if len(hits) != 1:
+            return
+        i, plain = hits[0], "its synthetic values could not be generated"
+    if tp.columns[i].role in ("null", "excluded") or key_or_related(tp, i):
         return
-    if tp.columns[i].role in ("null", "excluded") or _key_or_related(tp, i):
+    run.null_requests.setdefault(fr.rel_path, {}).setdefault(t_i, {})[i] = (plain, catalogue_fix(refusal.code))
+
+
+def _request_nulls_for_findings(fr: FileResult, settings: Settings, run: RunResult,
+                                findings: dict[int, list[Message]]) -> None:
+    """ADR-0001, the blocking findings made while ``fr`` was generated ({table number: messages}: ``verify_values``
+    errors, leak-scan hits): when every one is about one column that is not a key, not in a structural relationship
+    and not nulled already (``profile.sharing.generation_null_targets``), record null requests for those columns, so
+    ``execute`` generates the whole run again with them nulled. Otherwise (or with ``--refuse-unsupported``) nothing
+    is recorded and the file is left out, as before."""
+    if settings.mode != "sharing" or settings.refuse_unsupported or not findings:
         return
-    run.null_requests.setdefault(fr.rel_path, {}).setdefault(t_i, {})[i] = (refusal.plain, _catalogue_fix(refusal.code))
+    from .profile.sharing import generation_null_targets
+
+    targets = {t_i: generation_null_targets(fr.tables[t_i], messages) for t_i, messages in findings.items()}
+    if any(columns is None for columns in targets.values()):
+        return
+    for t_i, columns in targets.items():
+        run.null_requests.setdefault(fr.rel_path, {}).setdefault(t_i, {}).update(columns)
 
 
 def generate_file(fr: FileResult, settings: Settings, run: RunResult, reg: IdRegistry,
                   namespaces: dict[tuple[str, int], dict[int, str]]) -> docs.WrittenFile | None:
     """Pass 2 for one file: generate, protect, write, self-check. Returns docs input or None.
 
-    A :class:`ColumnRefusal` raised while a table is generated leaves the file out of this attempt; in sharing mode
-    a refused non-key column is requested nulled for the next one (:func:`_request_null_after_refusal`)."""
+    A :class:`ColumnRefusal` (or another :class:`GenerationError` naming one column) raised while a table is
+    generated, a ``verify_values`` error or a leak-scan hit leaves the file out of this attempt; in sharing mode a
+    non-key column they are all about is requested nulled for the next one (:func:`_request_null_after_refusal`,
+    :func:`_request_nulls_for_findings`)."""
     assert run.out_dir is not None and fr.layout is not None
     generating: int | None = None
+    findings: dict[int, list[Message]] = {}  # blocking findings made while values were generated, by table
     dest = run.out_dir / Path(*fr.out_rel_path.split("/"))
     tmp = dest.with_name(dest.name + TMP_SUFFIX)
     try:
@@ -563,16 +591,19 @@ def generate_file(fr: FileResult, settings: Settings, run: RunResult, reg: IdReg
 
                 for column in st.columns:
                     for message in verify_values(st.profile.columns[column.index], column.values):
+                        findings.setdefault(t_i, []).append(message)
                         fr.fail(message.text, message.fix, message.code, message.column)
             for column in st.columns:
                 # Every generation/privacy repair has finished. Writers render
                 # copies and never mutate these final synthetic column arrays.
                 column.values.flags.writeable = False
             for m in leaks.scan_table(tp, st):
+                findings.setdefault(t_i, []).append(m)
                 fr.fail(m.text + (f" (column {m.column})" if m.column else ""), m.fix, m.code, m.column)
             synth.append(st)
         generating = None
         if fr.failed:
+            _request_nulls_for_findings(fr, settings, run, findings)
             return None
         out_tables = [OutTable(st.name, st.header, [c.values for c in st.columns], [c.index for c in st.columns],
                                st.n_rows, dict(st.profile.layout), st.profile) for st in synth]
@@ -627,9 +658,11 @@ def generate_file(fr: FileResult, settings: Settings, run: RunResult, reg: IdReg
                     from .profile.sharing import verify_values
 
                     for message in verify_values(p, values):
+                        findings.setdefault(t_i, []).append(message)
                         fr.fail(message.text, message.fix, message.code, message.column)
                     if fr.failed:
                         dest.unlink(missing_ok=True)
+                        _request_nulls_for_findings(fr, settings, run, findings)
                         return None
                 coded = codes_of(values)
                 counts = counts_of(values)
@@ -694,7 +727,7 @@ def generate_file(fr: FileResult, settings: Settings, run: RunResult, reg: IdReg
             for column, text in selfcheck.dtype_drift(src_dt, dt, st.header):
                 fr.messages.append(Message("warning", "dtype_mismatch", text, column=column))
         return docs.WrittenFile(fr, synth, fr.synthetic_stats, dtypes)
-    except ColumnRefusal as e:
+    except GenerationError as e:
         tmp.unlink(missing_ok=True)
         if fr.written:
             dest.unlink(missing_ok=True)

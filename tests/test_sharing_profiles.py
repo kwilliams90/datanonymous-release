@@ -254,16 +254,38 @@ def test_private_entity_floors_and_public_level_metadata_cannot_restore_rare_uni
     assert source.private.entity_models[1].extra["floored_levels"] == 1
 
 
-@pytest.mark.parametrize("kind", [T.PERSON_NAME, T.FREE_TEXT, T.HIGH_CARD_CATEGORICAL])
-def test_rare_invented_text_shape_or_frequency_refuses_unique_donor(kind):
-    source, settings = table(["Elena"] * 20 + ["Bea"], [f"S{i:03d}" for i in range(21)], kind=kind)
+def _broadened(source, settings):
+    """The protected model of column 1, after checking that every class it writes is a held source class."""
+    p = sharing.protect_profile(source, settings).columns[1]
+    held = source.private.extra[sharing.EVIDENCE_KEY]["classes"][1]
+    signatures = sharing._generation_classes(p)
+    assert signatures and all(held.get(sig, 0) >= 10 for sig in signatures.values())
+    assert p.flags.get("sharing_format_broadened")
+    return p.model.nonmissing_counts
+
+
+def test_rare_name_shape_or_frequency_refuses_unique_donor():
+    source, settings = table(["Elena"] * 20 + ["Bea"], [f"S{i:03d}" for i in range(21)], kind=T.PERSON_NAME)
     with pytest.raises(GenerationError, match="format/frequency class"):
         sharing.protect_profile(source, settings)
     values = [f"v{i:03d}" for i in range(20)] + ["v100"] * 3
     ids = [f"S{i:03d}" for i in range(20)] + ["S100"] * 3
-    source, settings = table(values, ids, kind=kind)
+    source, settings = table(values, ids, kind=T.PERSON_NAME)
     with pytest.raises(GenerationError, match="format/frequency class"):
         sharing.protect_profile(source, settings)
+
+
+@pytest.mark.parametrize("kind", [T.FREE_TEXT, T.HIGH_CARD_CATEGORICAL])
+def test_rare_invented_text_shape_or_frequency_moves_to_a_held_class(kind):
+    # ADR-0004: the unique donor's class is never written; its rows take a held class
+    source, settings = table(["Elena"] * 20 + ["Bea"], [f"S{i:03d}" for i in range(21)], kind=kind)
+    assert _broadened(source, settings) == {"Elena": 20}  # one row is too few for another value of 20 rows
+    values = [f"v{i:03d}" for i in range(20)] + ["v100"] * 3
+    ids = [f"S{i:03d}" for i in range(20)] + ["S100"] * 3
+    source, settings = table(values, ids, kind=kind)
+    counts = _broadened(source, settings)
+    assert "v100" not in counts and set(counts.values()) == {1} and len(counts) == 23
+    assert all(sharing._shape(v) == "a000" for v in counts)
 
 
 @pytest.mark.parametrize("rare,common", [("O'", "D'"), ("O\u2019", "D\u2019"), ("Ab'", "De'"), ("Mc", "De")])
@@ -343,8 +365,8 @@ def test_different_date_offsets_and_formats_need_local_person_support():
     values = ["2004-02-03 10:15:00+00:00"] * 20 + ["2004-02-03 10:15:00-05:00"]
     params = date_profile(values).params
     source, settings = table(values, [f"S{i:03d}" for i in range(21)], kind=T.DATETIME, name="DOB", params=params)
-    with pytest.raises(GenerationError, match="format/frequency class"):
-        sharing.protect_profile(source, settings)
+    # ADR-0005: the unsupported offset is not written; its row takes the column's most common held value
+    assert _broadened(source, settings) == {"2004-02-03 10:15:00+00:00": 21}
 
 
 @pytest.mark.parametrize("rare,common,kind,missing,params", [
@@ -361,11 +383,21 @@ def test_exact_copied_variants_are_suppressed_despite_common_normalized_support(
     assert sharing.verify_values(p, [rare])[0].code == "sharing_rare_unit_restored"
 
 
-def test_whole_value_leading_zero_is_a_retained_text_donor_class():
+def test_a_rare_spelling_moves_with_its_whole_value_to_held_classes():
+    # one person writes v000 and V000; the spelling set is rare, so both spellings take held classes (ADR-0005)
+    values = [f"v{i:03d}" for i in range(1, 21)] + ["v000", "V000"]
+    ids = [f"S{i:03d}" for i in range(1, 21)] + ["S000"] * 2
+    source, settings = table(values, ids, kind=T.FREE_TEXT)
+    counts = _broadened(source, settings)
+    assert not {"v000", "V000"} & set(counts) and len(counts) == 22
+    assert all(sharing._shape(v) == "a000" for v in counts)
+
+
+def test_whole_value_leading_zero_is_a_retained_text_donor_class_and_is_broadened():
     values = [f"{41000+i} reference baaan" for i in range(39)] + ["00123 reference baaan"]
     source, settings = table(values, [f"S{i:03d}" for i in range(40)], kind=T.FREE_TEXT)
-    with pytest.raises(GenerationError, match="format/frequency class"):
-        sharing.protect_profile(source, settings)
+    counts = _broadened(source, settings)
+    assert len(counts) == 40 and not [v for v in counts if v.startswith("0")]
 
 
 def test_whole_name_variant_set_needs_local_person_support():

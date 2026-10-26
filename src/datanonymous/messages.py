@@ -301,6 +301,9 @@ problem("sharing_other_person_attribute", "This column describes a parent or tea
         "Leave it out with `--exclude`, or write it as an empty column with `--null`.")
 problem("sharing_rare_class", "This column has a date, text or personal-data layout that too few people share to release.",
         "Leave the column out with `--exclude`, or write it as an empty column with `--null`.")
+change("sharing_format_broadened",
+       "Values with a text layout or date format that too few people share were written in a broader layout or "
+       "date format that enough people share.")
 problem("real_values_in_output", "Real values from the source would have appeared in this file's output, so the file was left out.",
         "Leave the column that holds them out with `--exclude` or write it as an empty column with `--null`, and report the problem.")
 problem("name_holds_personal_data", "A name this file would write (its file, sheet or column name) holds personal data, so the file was left out.",

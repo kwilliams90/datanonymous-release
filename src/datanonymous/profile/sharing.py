@@ -183,17 +183,255 @@ def _generation_classes(p: ColumnProfile) -> dict[Any, str]:
                             for part, kind in spans[raw]])).encode("utf-8").hex()
                 for raw, base in bases.items()}
     if p.type in date_detect.DATE_TYPES:
-        params = {k: v for k, v in p.params.items() if k not in ("sentinels", "_other_tokens")}
-        if not params.get("formats"):
-            from ..generate.dates import _params
-
-            params = _params(replace(p, params=deepcopy(params)), p.model)
+        params = _date_params(p)
         view = date_detect.view(params, [v.strip() for v in values])
         return {raw: repr((int(view.sod[i]) if view.kind == "time" else int(view.dur[i]) if view.kind == "duration"
                            else int(view.mon[i]), int(view.cls[i]), str(view.tz[i]), int(view.digits[i]),
                            raw[:len(raw) - len(raw.lstrip())], raw[len(raw.rstrip()):])).encode("utf-8").hex()
                 for i, raw in enumerate(values) if view.cls[i] >= 0}
     return {}
+
+
+def _date_params(p: ColumnProfile) -> dict[str, Any]:
+    params = {k: v for k, v in p.params.items() if k not in ("sentinels", "_other_tokens")}
+    if not params.get("formats"):
+        from ..generate.dates import _params
+
+        params = _params(replace(p, params=deepcopy(params)), p.model)
+    return params
+
+
+# --------------------------------------------------------------------------- ADR-0004: broader held classes
+#: The informational code of a column whose rare text shapes or date formats were written in a broader held class
+BROADENED_CODE = "sharing_format_broadened"
+#: Invented text whose shape is a layout, not personal information: a rare shape may climb the ladder. Names,
+#: e-mail addresses, phone numbers, addresses, cities ... keep classes defined by personal information (ADR-0004).
+_BROADENED_TEXT_TYPES = frozenset({ColumnType.FREE_TEXT, ColumnType.HIGH_CARD_CATEGORICAL, ColumnType.DIGIT_CODE})
+
+
+def _pattern(shape: str) -> str:
+    """A character mask without length detail: each run of letters of one case, or of digits, becomes one."""
+    return re.sub(r"(A)A+|(a)a+|(0)0+", lambda m: m.group(1) or m.group(2) or m.group(3), shape)
+
+
+def _text_base(p: ColumnProfile, raw: str) -> tuple:
+    """The per-value part of :func:`_generation_classes` of a value with no embedded personal data."""
+    from ..generate.text import _lead_digit
+
+    return (_shape(raw), int(p.model.nonmissing_counts[raw]), _lead_digit(raw.strip()),
+            _retained_semantics(p.type.value.lower(), raw), [])
+
+
+def _template(donor: str, base: tuple, kind: str, taken: set[str], rnd: Any) -> str | None:
+    """A made-up value of the donor's class ``base`` (shape, leading digit, retained semantics, no personal data)
+    whose case-folded text is in no ``taken``; None when none is found."""
+    from ..generate.embedded import pii_spans
+    from ..generate.text import _lead_digit
+
+    zeros = len(donor.strip()) - len(donor.strip().lstrip("0"))
+    start = len(donor) - len(donor.lstrip())
+    for _ in range(200):
+        out = []
+        for i, ch in enumerate(donor):
+            if "0" <= ch <= "9":
+                out.append("0" if i - start < zeros else rnd.choice("0123456789"))
+            elif "A" <= ch <= "Z":
+                out.append(rnd.choice("ABCDEFGHJKLMNPQRSTUVWXYZ"))
+            elif "a" <= ch <= "z":
+                out.append(rnd.choice("abcdefghjkmnpqrstuvwxyz"))
+            else:
+                out.append(ch)
+        text = "".join(out)
+        if (text.strip().casefold() not in taken and not pii_spans(text, digit_phone=True)
+                and (_shape(text), _lead_digit(text.strip()), _retained_semantics(kind, text)) == (base[0], base[2], base[3])):
+            return text
+    return None
+
+
+def _remap(model: ColumnModel, chosen: dict[Any, str], groups: dict[str, list[tuple[Any, int]]],
+           exact: bool) -> ColumnModel:
+    """``model`` with each key of ``chosen`` replaced by the new values of its group: with their own counts when
+    ``exact``, else sharing out the replaced rows in proportion to those counts."""
+    nm: dict[Any, int] = {}
+    rows: Counter = Counter()
+    for raw, count in model.nonmissing_counts.items():
+        if raw in chosen:
+            rows[chosen[raw]] += int(count)
+        else:
+            nm[raw] = nm.get(raw, 0) + int(count)
+    for key in sorted(rows):
+        values = groups.get(key) or []
+        shares = [c for _, c in values] if exact else largest_remainder([c for _, c in values], rows[key]) if values else []
+        for (value, _), share in zip(values, shares):
+            if share:
+                nm[value] = nm.get(value, 0) + int(share)
+    return replace(model, nonmissing_counts=nm)
+
+
+def _broaden_text(p: ColumnProfile, source: ColumnProfile, rare: list[str], held: dict[str, int],
+                  signatures: dict[Any, str], k: int) -> tuple[dict[Any, str], dict[str, list[tuple[str, int]]]] | None:
+    """ADR-0004 ladder for rare invented text shapes: (rare value -> its class, class -> made-up values and counts).
+
+    Each rare value moves to the first held class on the ladder: its exact class (not held, or it would not be
+    rare), then the held classes of the same pattern without leading-digit and length detail, then the column's
+    most common held class. The made-up values are of a held class exactly (shape, leading digit, retained
+    semantics and frequency), so the generator writes them in that class. None when a rare value cannot be
+    broadened: its class is defined by personal information inside it, or no held class exists.
+    """
+    import random
+
+    from ..generate.embedded import pii_spans
+
+    if p.type not in _BROADENED_TEXT_TYPES:
+        return None
+    nm = p.model.nonmissing_counts
+    groups = Counter(raw.strip().casefold() for raw in nm if isinstance(raw, str))
+
+    def plain(raw: str) -> bool:  # one spelling and no personal data inside it
+        return groups[raw.strip().casefold()] == 1 and not pii_spans(raw, digit_phone=True)
+
+    if any(pii_spans(raw, digit_phone=True) for raw in rare):
+        return None  # a class defined by personal data inside the value is never broadened
+    # ADR-0005: skew rather than refuse. A rare spelling moves with every other spelling of its value (the
+    # spellings' class is their set), each spelling taking a held class of its own.
+    moving = {raw.strip().casefold() for raw in rare}
+    rare = [raw for raw in nm if isinstance(raw, str) and raw.strip().casefold() in moving]
+    if any(pii_spans(raw, digit_phone=True) for raw in rare):
+        return None
+    targets: dict[str, tuple[int, str, tuple]] = {}  # repr(class) -> (holders, a donor value, class)
+    for raw, signature in signatures.items():
+        if raw in nm and int(held.get(signature, 0)) >= k and plain(raw):
+            base = _text_base(source, raw)
+            targets.setdefault(repr(base), (int(held[signature]), raw, base))
+    if not targets:
+        return None
+    ranked = sorted(targets, key=lambda key: (-targets[key][0], key))
+
+    def rung(raw: str) -> str:  # same pattern without leading-digit and length detail, else most common held
+        pattern = _pattern(_shape(raw))
+        return next((key for key in ranked if _pattern(targets[key][2][0]) == pattern), ranked[0])
+
+    chosen = {raw: rung(raw) for raw in rare}
+    rows: Counter = Counter()
+    for raw, key in chosen.items():
+        rows[key] += int(nm[raw])
+    taken = {raw.strip().casefold() for raw in (*nm, *source.model.nonmissing_counts) if isinstance(raw, str)}
+    rnd = random.Random(f"sharing-broaden:{p.name}:{p.index}")
+    made: dict[str, list[str]] = {}
+    counts: dict[str, int] = {}
+    for key in sorted(rows):
+        _, donor, base = targets[key]
+        count = max(1, int(base[1]))  # each made-up value keeps the held class's frequency
+        made[key] = []
+        for _ in range(int(round(rows[key] / count))):
+            value = _template(donor, base, p.type.value.lower(), taken, rnd)
+            if value is None:
+                break  # ADR-0005: the remaining rows go to the held values rather than refuse the column
+            taken.add(value.strip().casefold())
+            made[key].append(value)
+            counts[value] = count
+    # rows too few for one more value of a class's frequency go to the held values when the column is allocated
+    return chosen, {key: [(value, counts[value]) for value in values] for key, values in made.items()}
+
+
+def _broaden_dates(p: ColumnProfile, rare: list[str], held: dict[str, int], signatures: dict[Any, str],
+                   k: int) -> tuple[dict[Any, str], dict[str, list[tuple[str, int]]]] | None:
+    """ADR-0004 for dates: a value in a rare date format is written in the column's most common held format.
+
+    A format is held when a held class uses it. A rare value whose format is held (it is rare for another reason,
+    such as its month or offset), or that cannot be written in the held format keeping its date, time and offset,
+    goes to the most common held value of that format instead (ADR-0005: skew a distribution rather than refuse).
+    None when no held format exists.
+    """
+    import numpy as np
+
+    from ..generate import dates as gen_dates
+
+    params = _date_params(p)
+    values = [v for v in p.model.nonmissing_counts if isinstance(v, str)]
+    view = date_detect.view(params, [v.strip() for v in values])
+    at = {raw: i for i, raw in enumerate(values)}
+
+    def layout(i: int) -> tuple[int, int]:
+        return int(view.cls[i]), int(view.digits[i])
+
+    rows: Counter = Counter()
+    for raw, signature in signatures.items():
+        if raw in at and int(held.get(signature, 0)) >= k:
+            rows[layout(at[raw])] += int(p.model.nonmissing_counts[raw])
+    if not rows:
+        return None
+    target = min(rows, key=lambda f: (-rows[f], f))
+    # ADR-0005: a value that cannot be written in the held format keeping its date goes to the most common held
+    # value of that format instead (a skewed distribution, never a refused column)
+    fallback = max((raw for raw, signature in signatures.items() if raw in at and int(held.get(signature, 0)) >= k
+                    and layout(at[raw]) == target), key=lambda raw: (int(p.model.nonmissing_counts[raw]), raw))
+    kind = view.kind
+    profile = replace(p, params=params)
+
+    def component(v: Any, i: int) -> int:
+        return int(v.sod[i]) if kind == "time" else int(v.dur[i]) if kind == "duration" else int(v.mon[i])
+
+    chosen: dict[Any, str] = {}
+    groups: dict[str, list[tuple[str, int]]] = {}
+    for raw in rare:
+        i = at.get(raw)
+        if i is None:
+            return None
+        if layout(i) in rows:  # rare for another reason (its month, its offset): ADR-0005 skews, not refuses
+            chosen[raw] = fallback
+            groups[fallback] = [(fallback, 1)]
+            continue
+        cell = gen_dates._empty(1)
+        cell["fmt"] = target[0]
+        cell["day"] = int(view.day[i])
+        cell["us"] = int(view.dur[i]) if kind == "duration" else int(view.sod[i])
+        cell["tz"] = np.asarray([str(view.tz[i] or "")], dtype=object)
+        cell["fd"] = target[1] if target[1] >= 0 else -1
+        cell["lead"] = np.asarray([raw[:len(raw) - len(raw.lstrip())]], dtype=object)
+        cell["trail"] = np.asarray([raw[len(raw.rstrip()):]], dtype=object)
+        written = str(gen_dates.render_dates(profile, cell)[0])
+        check = date_detect.view(params, [written.strip()])
+        # the value must read back in the held format with the same date, time and offset
+        if ((int(check.cls[0]), int(check.digits[0])) != target or component(check, 0) != component(view, i)
+                or str(check.tz[0] or "") != str(view.tz[i] or "")
+                or kind in ("date", "datetime") and int(check.day[0]) != int(view.day[i])
+                or kind == "datetime" and int(check.sod[0]) != int(view.sod[i])):
+            written = fallback
+        chosen[raw] = written
+        groups[written] = [(written, 1)]
+    return chosen, groups
+
+
+def _broaden(p: ColumnProfile, source: ColumnProfile, private: Any, held: dict[str, int],
+             signatures: dict[Any, str], k: int) -> int:
+    """Move the rare text shapes or date formats of ``p`` into broader held classes (ADR-0004), in its generation
+    model and its per-entity model. Returns how many source values moved (0: none could, the column refuses)."""
+    rare = [raw for raw, signature in signatures.items()
+            if raw in p.model.nonmissing_counts and int(held.get(signature, 0)) < k]
+    if not rare:
+        return 0
+    found = (_broaden_text(p, source, rare, held, signatures, k) if _invented(p)
+             else _broaden_dates(p, rare, held, signatures, k) if p.type in date_detect.DATE_TYPES else None)
+    if found is None:
+        return 0
+    chosen, groups = found
+    before = p.model
+    p.model = _remap(p.model, chosen, groups, exact=_invented(p))
+    if p.type in date_detect.DATE_TYPES and p.params.get("formats"):
+        # a format no value is written in any more is not named in the shared schema or data dictionary either
+        def used(model: ColumnModel) -> set[int]:
+            texts = [v.strip() for v in model.nonmissing_counts if isinstance(v, str)]
+            return {int(c) for c in date_detect.view(_date_params(p), texts).cls.tolist() if c >= 0}
+
+        gone = used(before) - used(p.model)
+        p.params["formats"] = [f for i, f in enumerate(p.params["formats"]) if i not in gone]
+        if p.type is ColumnType.DATE_MIXED_FORMATS and len(p.params["formats"]) == 1:
+            p.type = ColumnType.DATE  # nor does the type say that another format existed
+    if p.index in private.entity_models:
+        private.entity_models[p.index] = _remap(private.entity_models[p.index], chosen, groups, exact=False)
+    p.flags["sharing_format_broadened"] = True
+    return len(rare)
 
 
 def _check_embedded_relationships(columns: list[ColumnProfile]) -> None:
@@ -634,6 +872,18 @@ def protect_profile(tp: TableProfile, settings: Any) -> TableProfile:
                 _refuse(p, "cannot establish distinct-person support for its retained date, text or PII classes", _NO_PEOPLE, "sharing_no_people")
             signatures = _generation_classes(source)
             held_classes = (evidence.get("classes") or {}).get(p.index, {})
+            moved = _broaden(p, source, private, held_classes, signatures, k)
+            if moved:
+                # every class the generator now writes must be held by itself, as before
+                signatures = _generation_classes(replace(source, model=p.model, params=p.params))
+                out.messages.append(Message(
+                    "info", BROADENED_CODE,
+                    f"{moved} value(s) of column {p.name!r} had a "
+                    + ("date format, month or offset" if p.type in date_detect.DATE_TYPES else "layout")
+                    + " too few people share, so they were written in "
+                    + ("the column's most common held date format" if p.type in date_detect.DATE_TYPES
+                       else "a broader layout that enough people share"),
+                    column=p.name))
             if any(int(held_classes.get(signature, 0)) < k for raw, signature in signatures.items()
                    if raw in p.model.nonmissing_counts):
                 _refuse(p, "has a date, text or PII format/frequency class supported by fewer than the required distinct people",

@@ -521,6 +521,9 @@ def generate_file(fr: FileResult, settings: Settings, run: RunResult, reg: IdReg
                 from .profile.sharing import protect_profile
 
                 generation_profile = protect_profile(tp, settings)
+                # the deliberate changes protection made (ADR-0004 broader classes) are reported with the table
+                tp.messages.extend(m for m in generation_profile.messages[len(tp.messages):]
+                                   if m.level == "info" and m not in tp.messages)
             st = generate_table(generation_profile, ctx)
             generated_profile = st.profile
             priv = matches.enforce(generated_profile, st, stream(run.seed, fr.rel_path, tp.name or "", "__privacy__"),

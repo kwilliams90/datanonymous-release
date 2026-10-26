@@ -28,6 +28,10 @@ _Avoid_: Template, pattern, shape class
 A count class or format class that at least `--min-cell` distinct source people hold, so it may appear in sharing output.
 _Avoid_: Common class, supported class
 
+**Person column**:
+A column that says which person each row belongs to, such as a student ID or a student's name.
+_Avoid_: Entity column, subject key
+
 **Private report**:
 The report folder for a run. It describes the source and must never be shared.
 _Avoid_: Run report, log folder

@@ -393,14 +393,18 @@ def test_discrete_interior_donor_is_suppressed_and_supported_extrema_remain():
     assert not sharing.verify_values(p, ["0.00", "3.000"])
 
 
-def test_extended_discrete_interpolation_refuses_an_interior_donor():
+def test_extended_discrete_interior_donor_is_suppressed_and_never_interpolated_back():
+    from datanonymous.generate.table import generate_values
     from test_area_b_detect import detect
 
     values = ["$0.00"] * 10 + ["$1.00"] * 10 + ["$2.00"] + ["$3.00"] * 19
     detection = detect(values)
     source, settings = table(values, [f"S{i:03d}" for i in range(40)], kind=T.NUMERIC_FORMATTED, params=detection.params)
-    with pytest.raises(GenerationError, match="interpolation can restore"):
-        sharing.protect_profile(source, settings)
+    p = sharing.protect_profile(source, settings).columns[1]
+    assert set(p.model.nonmissing_counts) == {"$0.00", "$1.00", "$3.00"}
+    out = generate_values(p, p.model, 400, np.random.default_rng(3))[0]
+    assert set(out) == {"$0.00", "$1.00", "$3.00"}
+    assert sharing.verify_values(p, ["$2.00"])[0].code == "sharing_rare_unit_restored"
 
 
 def test_continuous_numeric_model_and_final_verifier_exclude_original_endpoints():

@@ -602,6 +602,39 @@ def decimal_text(v: Decimal, decimals: int) -> str:
     return s
 
 
+#: Sharing mode (ADR-0002): a discrete formatted number whose rare values were suppressed is drawn by exact quota
+#: over the values that remain. Interpolating between neighbours could land on a suppressed value again.
+LEVELS_KEY = "_sharing_numeric_levels"
+
+
+def generate_numeric_levels(profile: ColumnProfile, model: ColumnModel, n: int,
+                            rng: np.random.Generator) -> tuple[np.ndarray, dict[str, bool]]:
+    """``n`` values by exact quota over the column's remaining distinct numbers (and tokens), never between them.
+
+    Numbers come back as exact ``Decimal``; :func:`render_numeric_extended` writes them in the column's own format.
+    """
+    from .quota import quota_sample
+
+    p = profile.params
+    tokens = set(p.get("tokens") or p.get("_tokens") or ())
+    fmt = p.get("format")
+    counts: dict[Any, int] = {}
+    for raw, c in model.nonmissing_counts.items():
+        if profile.type is ColumnType.NUMERIC_WITH_TOKENS and fmt and _is_token(raw, tokens, fmt):
+            key: Any = raw
+        else:
+            value = exact_value(raw, profile)
+            if value is None:
+                continue
+            key = value.normalize(DEC_CONTEXT) if value else Decimal(0)
+        counts[key] = counts.get(key, 0) + int(c)
+    if not counts:
+        raise UnsupportedColumnError(f"column {profile.name!r}: no values to sample")
+    levels = list(counts)
+    values, adjusted = quota_sample(levels, list(counts.values()), n, rng, floor=len(levels) <= n)
+    return values, {"rare_category_adjusted": adjusted}
+
+
 def generate_numeric_extended(profile: ColumnProfile, model: ColumnModel, n: int,
                               rng: np.random.Generator) -> tuple[np.ndarray, dict[str, bool]]:
     """AREA B hook: values for NUMERIC_FORMATTED / NUMERIC_WITH_TOKENS / DECIMAL columns.
@@ -618,6 +651,8 @@ def generate_numeric_extended(profile: ColumnProfile, model: ColumnModel, n: int
     t = profile.type
     p = profile.params
     exact = not p.get("_no_exact_extremes", False)
+    if p.get(LEVELS_KEY):
+        return generate_numeric_levels(profile, model, n, rng)
     if t is ColumnType.NUMERIC_WITH_TOKENS:
         return _generate_with_tokens(profile, model, n, rng, exact)
     if t in (ColumnType.NUMERIC_FORMATTED, ColumnType.DECIMAL):

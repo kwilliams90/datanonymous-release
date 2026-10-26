@@ -15,6 +15,8 @@ from .quota import largest_remainder
 
 TYPES = frozenset({T.INTEGER, T.INTEGER_YEAR, T.FLOAT, T.DECIMAL, T.NUMERIC_FORMATTED,
                    T.NUMERIC_WITH_TOKENS, T.LAT, T.LON})
+from .numeric import LEVELS_KEY  # noqa: E402
+
 MARKER = "_sharing_numeric_extremes"
 FORBIDDEN_KEY = "_sharing_forbidden_numeric_extremes"
 
@@ -92,4 +94,4 @@ def protect_model(profile: ColumnProfile, model: ColumnModel, forbidden: frozens
     return replace(model, nonmissing_counts=nonmissing, missing_counts=missing, sorted_numeric=np.sort(xs))
 
 
-__all__ = ["TYPES", "MARKER", "FORBIDDEN_KEY", "discrete", "normalized_key", "source_extremes", "forbidden_extremes", "protect_model"]
+__all__ = ["TYPES", "LEVELS_KEY", "MARKER", "FORBIDDEN_KEY", "discrete", "normalized_key", "source_extremes", "forbidden_extremes", "protect_model"]

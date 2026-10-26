@@ -31,6 +31,13 @@ SOURCE_COLUMN_KEY = "_sharing_source_column"
 SUPPRESSED_KEY = "_sharing_suppressed_units"
 PERSON_DATE_KEY = "_sharing_person_date"
 LOOKUP_KEY = "_sharing_lookup"
+#: evidence: {template target column: distinct people holding a filled value of it} (issue #30)
+TEMPLATE_PEOPLE_KEY = "template_people"
+#: ``ColumnProfile.params`` key (PRIVATE) of a column sharing mode rebuilds from its template's fictional inputs
+#: (their names), and the template info key that tells generation to rebuild it that way (issue #30)
+REBUILT_KEY = "_sharing_rebuilt_from"
+#: catalogue ``change`` code: a template column was rebuilt from the row's fictional values (issue #30)
+TEMPLATE_REBUILT_CODE = "template_rebuilt"
 #: ADR-0006: the table's rows were counted as its people (a utility warning: it needs attention, never blocks)
 ROWS_AS_PEOPLE_CODE = "sharing_rows_as_people"
 
@@ -486,6 +493,24 @@ def _units(p: ColumnProfile, raw: Any) -> list[str]:
     return []
 
 
+def _holders(keys: Any, rows_people: bool, values: Any, p: ColumnProfile, extract: Any) -> dict[str, int]:
+    """Distinct people holding each unit ``extract`` reads from ``values`` (column ``p``'s raw values): the fewest any
+    person key of the table gives, one record exported several times counting once when rows are people."""
+    held = text_detect.unit_holders(values, p, texts=extract)
+    if not held:
+        return held
+    for index in keys.keys:
+        got = text_detect.unit_holders(values, p, index, extract)
+        held = {k: min(c, got.get(k, 0)) for k, c in held.items()}
+    if rows_people and keys.table is not None:
+        # one record exported several times is one person (as for D35's rows: HolderKeys.duplicates)
+        wanted = [k for k, c in held.items() if c >= 2]
+        found = text_detect.unit_rows(values, p, wanted, extract)
+        for k, dup in keys.duplicates(p.index, values, found).items():
+            held[k] = min(held[k], dup)
+    return held
+
+
 def record_evidence(tp: TableProfile, raw: RawTable, settings: Any) -> None:
     """Capture exact local distinct-person counts after profiling, before dropping raw rows.
 
@@ -546,25 +571,29 @@ def record_evidence(tp: TableProfile, raw: RawTable, settings: Any) -> None:
             return [key] if key is not None else []
 
         for destination, extract in ((counts, units), (classes, signature), (numbers, numeric), (date_buckets, date_bucket)):
-            held = text_detect.unit_holders(counted_values, p, texts=extract)
-            if not held:
-                continue
-            for index in keys.keys:
-                got = text_detect.unit_holders(counted_values, p, index, extract)
-                held = {k: min(c, got.get(k, 0)) for k, c in held.items()}
-            if rows_people and keys.table is not None:
-                # one record exported several times is one person (as for D35's rows: HolderKeys.duplicates)
-                wanted = [k for k, c in held.items() if c >= 2]
-                found = text_detect.unit_rows(counted_values, p, wanted, extract)
-                for k, dup in keys.duplicates(p.index, counted_values, found).items():
-                    held[k] = min(held[k], dup)
-            destination[p.index] = held
+            held = _holders(keys, rows_people, counted_values, p, extract)
+            if held:
+                destination[p.index] = held
+    # issue #30: how many people hold a filled value of each column a template builds (the template's shape)
+    template_people: dict[int, int] = {}
+    for info in tp.structure.private.get("templates", ()):
+        p = tp.columns[int(info["target"])]
+        if p.model is None or p.role in ("excluded", "null", "id"):
+            continue
+        missing = frozenset(v for v in p.model.missing_counts if isinstance(v, str))
+
+        def filled(v: Any, missing: frozenset = missing) -> list[str]:
+            return ["t:filled"] if isinstance(v, str) and v.strip() and v not in missing else []
+
+        held = _holders(keys, rows_people, raw.columns[p.index].values, p, filled)
+        template_people[p.index] = max(held.values(), default=0)
     people = bool(keys.people or rows_people)
     one_per_person = bool(keys.people and keys.keys and all(len(np.unique(k)) == raw.n_rows for k in keys.keys))
     tp.private.extra[EVIDENCE_KEY] = {"people": people, "rows_as_people": rows_people, "counts": counts,
                                       "classes": classes, "numbers": numbers,
                                       "date_buckets": date_buckets if people else {},
-                                      "one_row_per_person": one_per_person}
+                                      "one_row_per_person": one_per_person,
+                                      TEMPLATE_PEOPLE_KEY: template_people if people else {}}
     if rows_people and (counts or classes or numbers or date_buckets):
         tp.messages.append(Message(
             "warning", ROWS_AS_PEOPLE_CODE,
@@ -754,7 +783,62 @@ def _trim_params(p: ColumnProfile, rare: set[str]) -> None:
             p.params.pop(key)
 
 
-def _structural_contracts(tp: TableProfile, dates: set[int]) -> None:
+def _fictional_input(p: ColumnProfile) -> bool:
+    """A column sharing mode always writes with fictional values: a minted ID, or generated person names."""
+    return p.role == "id" or (p.role in ("row", "entity") and p.type is ColumnType.PERSON_NAME)
+
+
+def _rebuildable_templates(tp: TableProfile, evidence: dict[str, Any], k: int) -> dict[int, dict[str, Any]]:
+    """Issue #30: the applied templates of ``tp`` (target column -> template info) whose target sharing mode can write
+    by applying the template to the row's written values instead of protecting (or nulling) it. All of:
+
+    * the target is an e-mail column (not a key) and every input is fictional in the output (:func:`_fictional_input`:
+      minted IDs, generated names), never a real value;
+    * every literal part is one the generator writes anyway: separators (a fixed public list) and the domain, which
+      is always the generator's one fictional reserved domain, never a real one (``generate.structure``). A free
+      digit run copies the source's digit-run lengths, so a template with one is not rebuilt;
+    * the template's shape is held by at least ``k`` distinct people (every filled value has it).
+
+    Any other template keeps today's protection (its target is refused and nulled; the link is reported lost)."""
+    if not evidence.get("people"):
+        return {}
+    people = evidence.get(TEMPLATE_PEOPLE_KEY) or {}
+    out: dict[int, dict[str, Any]] = {}
+    for info in tp.structure.private.get("templates", ()):
+        t = int(info["target"])
+        target = tp.columns[t]
+        parts = info.get("parts", ())
+        inputs = [int(part[1]) for part in parts if part[0] == "f"]
+        if (target.type is not ColumnType.EMAIL or target.role not in ("row", "entity") or not info.get("email")
+                or target.params.get("id_candidate") or not inputs or t in inputs
+                or any(part[0] not in ("f", "s") for part in parts)
+                or not all(_fictional_input(tp.columns[i]) for i in inputs)
+                or int(people.get(t, 0)) < k):
+            continue
+        out[t] = info
+    return out
+
+
+def _rebuild_template(out: TableProfile, info: dict[str, Any], p: ColumnProfile) -> None:
+    """Make generation write column ``p`` of the protected table ``out`` from template ``info`` (its copy in ``out``)
+    applied to the row's fictional values (issue #30): one fictional reserved domain, no source value groups, and a
+    row the template cannot fill safely written empty (``generate.structure``)."""
+    info[REBUILT_KEY] = True
+    info.pop("groups", None)  # the source's distinct/frequency grouping is not kept
+    info.pop("lossy", None)
+    if info.get("domains"):
+        # the generator's first fictional domain (never a real one: profile.templates.reserved_domains); the number
+        # of distinct source domains and their shares are not kept
+        info["domains"] = [(info["domains"][0][0], sum(int(c) for _, c in info["domains"]))]
+    names = [out.columns[i].name for i in dict.fromkeys(int(part[1]) for part in info["parts"] if part[0] == "f")]
+    p.params[REBUILT_KEY] = tuple(names)
+    p.params["_template_profile"] = "rebuilt from the row's fictional values in sharing mode"
+    out.messages.append(Message("info", TEMPLATE_REBUILT_CODE,
+                                f"{p.name} was rebuilt from the fictional {_names(names)} written in each row",
+                                column=p.name))
+
+
+def _structural_contracts(tp: TableProfile, dates: set[int], rebuilt: frozenset[int] = frozenset()) -> None:
     sensitive = {p.index for p in tp.columns if p.role == "id" or _invented(p)} | dates
     dropped = {p.index for p in tp.columns if p.role in ("null", "excluded")}  # their relationships are not kept
     for fd in tp.structure.private.get("fds", ()):
@@ -766,6 +850,8 @@ def _structural_contracts(tp: TableProfile, dates: set[int]) -> None:
     # relationship even after its input labels become fictional.
     for template in tp.structure.private.get("templates", ()):
         if dropped.intersection({template["target"]} | {part[1] for part in template.get("parts", ()) if part[0] == "f"}):
+            continue
+        if template["target"] in rebuilt:  # written from the row's fictional values only (issue #30)
             continue
         if template.get("groups") or sensitive.intersection(
                 {template["target"]} | {part[1] for part in template.get("parts", ()) if part[0] == "f"}):
@@ -830,6 +916,9 @@ def protect_profile(tp: TableProfile, settings: Any) -> TableProfile:
                   columns=columns, private=private, structure=structure, messages=list(tp.messages))
     related = _related_columns(tp)
     value_contracts = _related_columns(tp, composite=False)
+    # issue #30: columns written by applying their template to the row's fictional values; none of their own values
+    # is generated, so their value layouts are not protected (only their missing-value spellings)
+    rebuilt = {t: info for t, info in _rebuildable_templates(tp, evidence, k).items() if not lookup}
     changed: set[int] = set()
     person_dates: set[int] = set()
     _check_embedded_relationships(columns)
@@ -855,7 +944,7 @@ def protect_profile(tp: TableProfile, settings: Any) -> TableProfile:
             _refuse(p, "cannot establish distinct-person support for its categories or missing values", _NO_PEOPLE, "sharing_no_people")
         rare = {u for u in requested if int(held.get(u, 0)) < k} if not lookup else set()
         if rare:
-            if p.index in related:
+            if p.index in related and p.index not in rebuilt:
                 _refuse(p, "has rare units in a structural key, dependency or rule that cannot be safely regenerated", _TIED, "sharing_rare_in_structure")
             p.model = _protect_model(source, p.model, rare)
             if p.index in private.entity_models:
@@ -919,6 +1008,10 @@ def protect_profile(tp: TableProfile, settings: Any) -> TableProfile:
                 if p.index in private.entity_models:
                     private.entity_models[p.index] = _protect_model(source, private.entity_models[p.index], date_missing)
                 changed.add(p.index)
+        if p.index in rebuilt:
+            _rebuild_template(out, next(info for info in structure.private["templates"]
+                                        if int(info["target"]) == p.index), p)
+            continue
         if not lookup and p.model.n_nonmissing and (_invented(p) or p.type in date_detect.DATE_TYPES):
             if not evidence.get("people"):
                 _refuse(p, "cannot establish distinct-person support for its retained date, text or PII classes", _NO_PEOPLE, "sharing_no_people")
@@ -940,7 +1033,7 @@ def protect_profile(tp: TableProfile, settings: Any) -> TableProfile:
                    if raw in p.model.nonmissing_counts):
                 _refuse(p, "has a date, text or PII format/frequency class supported by fewer than the required distinct people",
                         "some of its value layouts are shared by too few people", "sharing_rare_class")
-    _structural_contracts(out, person_dates)
+    _structural_contracts(out, person_dates, frozenset(rebuilt))
     # Source joint missingness can identify one pattern donor even when every
     # marginal is common. Only independent protected marginals survive.
     structure.missingness = _independent_missingness(columns, tp.n_rows)
@@ -1275,4 +1368,5 @@ def null_unprotectable_columns(tp: TableProfile, settings: Any) -> list[str]:
 
 __all__ = ["record_evidence", "protect_profile", "ROWS_AS_PEOPLE_CODE", "verify_values", "null_column", "null_unprotectable_columns",
            "mark_auto_nulled", "column_scoped_findings", "AUTO_NULL_CODE", "AUTO_NULL_ALTERNATIVE_KEY", "AUTO_NULL_SOURCE", "EVIDENCE_KEY", "SOURCE_MODEL_KEY", "SUPPRESSED_KEY", "PERSON_DATE_KEY", "LOOKUP_KEY", "CHANGES_KEY", "change_records",
-           "in_table_links", "lost_links", "with_lost_links", "LINK_NOT_KEPT_CODE", "LOST_LINKS_KEY"]
+           "in_table_links", "lost_links", "with_lost_links", "LINK_NOT_KEPT_CODE", "LOST_LINKS_KEY",
+           "TEMPLATE_PEOPLE_KEY", "REBUILT_KEY", "TEMPLATE_REBUILT_CODE"]

@@ -40,7 +40,7 @@ def _record_text(kind: str, count: int, counts: bool) -> str:
 
 def file_changes(fr: FileResult, counts: bool = True) -> list[tuple[str | None, str]]:
     """(column or None, plain text) of every deliberate change made to ``fr``, each listed once."""
-    from ..profile.sharing import AUTO_NULL_SOURCE, CHANGES_KEY, LINK_NOT_KEPT_CODE
+    from ..profile.sharing import AUTO_NULL_SOURCE, CHANGES_KEY, LINK_NOT_KEPT_CODE, TEMPLATE_REBUILT_CODE
 
     out: list[tuple[str | None, str]] = []
     for tp in fr.tables:
@@ -64,9 +64,10 @@ def file_changes(fr: FileResult, counts: bool = True) -> list[tuple[str | None, 
     links: set[str] = set()
     for m in fr.all_messages():
         entry = catalogue.lookup(m.code)
-        if entry is not None and m.code == LINK_NOT_KEPT_CODE:
-            # the private report names the link (each once, under the first column nulled in it); the README only
-            # says that one is not kept: which columns were linked in the source is a source fact
+        if entry is not None and m.code in (LINK_NOT_KEPT_CODE, TEMPLATE_REBUILT_CODE):
+            # the private report names the link (each once, under the first column nulled in it, or the column rebuilt
+            # from the fictional values); the README only says that one is not kept, or rebuilt: which columns were
+            # linked in the source is a source fact
             if counts and m.text not in links:
                 links.add(m.text)
                 out.append((m.column, m.text))

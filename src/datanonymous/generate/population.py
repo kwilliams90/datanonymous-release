@@ -17,14 +17,14 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from functools import reduce
 from math import gcd
 from typing import Any
 
 import numpy as np
 
-from ..detect.ids import (char_mask, id_text, integral_float_parts, is_hex_id, luhn_check_digit,
+from ..detect.ids import (char_mask, id_text, integral_float_parts, is_hex_id, kept_prefix, luhn_check_digit,
                           normalize_id, thousands_digits)
 from ..errors import UnsupportedColumnError
 from ..model import Message, TableProfile
@@ -37,6 +37,10 @@ from .rng import stream
 PLAN_KEY = "_sharing_population"
 #: the informational message of a table whose rare rows-per-person count classes were rebalanced (ADR-0003)
 REBALANCED_CODE = "count_classes_rebalanced"
+#: ADR-0004: some IDs of a column were written in its most common held format class (a "change" in the catalogue)
+FORMAT_NORMALISED_CODE = "id_format_normalised"
+FORMAT_NORMALISED_TEXT = ("IDs in a rare format were written in the column's most common format, "
+                          "so no rare ID format is released.")
 
 
 @dataclass(frozen=True)
@@ -56,6 +60,10 @@ class _Shape:
     width: int = 0
     lead: str = ""
     trail: str = ""
+    #: the column's held format classes (each held by ``--min-cell`` of its IDs), most common first (ADR-0004)
+    held: tuple[tuple[_Shape, int], ...] = field(default=(), compare=False, repr=False)
+    #: some of the column's IDs are written in a format class other than their own (ADR-0004)
+    normalised: bool = field(default=False, compare=False)
 
     def render(self, values: np.ndarray) -> np.ndarray:
         def one(value: Any) -> str:
@@ -116,6 +124,12 @@ def _blame(key: tuple[str, int]) -> Iterator[None]:
 
 
 def _shape(raw: np.ndarray, minimum: int) -> _Shape:
+    """The column's most common held format class, with its other held classes (ADR-0004).
+
+    IDs of a rare class, and of a minority layout in a mixed column, are written in a held class; the namespace
+    picks which one fits its target class (:func:`_fit_shapes`). With no held class the column is refused, as is
+    a column of e-mail-address IDs.
+    """
     forms: dict[_Shape, set[str]] = defaultdict(set)
     strings = [v for v in set(np.asarray(raw, dtype=object).tolist()) if isinstance(v, str) and id_text(v)]
     padded = any(v.strip().isascii() and v.strip().isdigit() and len(v.strip()) > 1
@@ -140,11 +154,88 @@ def _shape(raw: np.ndarray, minimum: int) -> _Shape:
         forms[f].add(normalize_id(s))
     if not forms:
         _refuse("an identifier column has no nonmissing keys")
-    if any(len(keys) < minimum for keys in forms.values()):
+    # most IDs first; a tie goes by the layout itself, never by who holds it
+    ranked = sorted(forms.items(), key=lambda item: (-len(item[1]), item[0].kind, item[0].template,
+                                                     item[0].width, item[0].lead, item[0].trail))
+    held = tuple((form, len(keys)) for form, keys in ranked if len(keys) >= minimum)
+    if not held:
         _refuse("an identifier format class is held by fewer than --min-cell people")
-    if len(forms) != 1:
-        _refuse("mixed identifier layouts cannot yet be assigned independently with valid joins")
-    return next(iter(forms))
+    return replace(held[0][0], held=held, normalised=len(forms) > 1)
+
+
+_DIGIT_KINDS = frozenset({"integer", "float", "grouped"})
+
+
+def _id_class(rep: str) -> tuple[str, str]:
+    """A namespace's format class of one ID: digits (widths are folded separately), a hex layout, or a mask."""
+    if _is_digit_rep(rep):
+        return ("digits", "")
+    if is_hex_id(rep):
+        # UUID/hash character classes vary with the random digits, not with a donor
+        return ("hex", "".join("0" if c.isalnum() else c for c in rep))
+    return ("mask", char_mask("".join(c for c in rep if c.isalnum())).lower())
+
+
+def _target_class(ns: IdNamespace, minimum: int) -> tuple[str, str]:
+    """The namespace's most common held format class: every ID of the namespace is minted in it (ADR-0004).
+
+    A namespace of one class keeps today's checks (width folding, the patterned-class check in :func:`_mint`).
+    """
+    classes = Counter(_id_class(v) for v in ns.representatives.values())
+    if len(classes) <= 1:  # an empty namespace mints nothing
+        return next(iter(classes), ("digits", ""))
+    held = [c for c, n in classes.items() if n >= minimum]
+    if not held:
+        _refuse(f"identifier column {_columns(ns)}: an identifier format class is held by fewer than --min-cell "
+                "people")
+    return max(held, key=lambda c: (classes[c], c))
+
+
+def _target_prefix(ns: IdNamespace, target: tuple[str, str], banned: set[str], minimum: int) -> str:
+    """The letter prefix the namespace's patterned IDs keep (``detect.ids.kept_prefix``).
+
+    One format class: the registry's (common to every patterned ID). Several: the one common to the IDs of the
+    target class, which ``--min-cell`` IDs hold (a rare class's letters can only shorten it, never show).
+    """
+    if target[0] != "mask":
+        return ""
+    reps = list(ns.representatives.values())
+    classes = [_id_class(v) for v in reps]
+    if all(c == target for c in classes):
+        return ns.prefix
+    return kept_prefix([v for v, c in zip(reps, classes) if c == target], banned, minimum)
+
+
+def _fits(shape: _Shape, target: tuple[str, str]) -> bool:
+    kind, layout = target
+    if kind == "digits":
+        return shape.kind in _DIGIT_KINDS
+    if shape.kind != "pattern":
+        return False
+    if kind == "hex":
+        return "".join("0" if c.isalnum() else c for c in shape.template) == layout
+    return "".join(c for c in shape.template if c.isalnum()).lower() == layout
+
+
+def _fit_shapes(ns: IdNamespace, target: tuple[str, str], columns: list[tuple[_Table, int]]) -> None:
+    """Write each column of the namespace in a held format class that fits the namespace's target class.
+
+    A column's own most common held class that fits, else another held class of its own, else the most common
+    fitting class another column of the namespace holds (a table that holds only the minority layout). Every
+    class written is held by ``--min-cell`` IDs of the column that holds it.
+    """
+    shared = sorted(((form, n) for table, col in columns for form, n in table.shapes[col].held
+                     if _fits(form, target)), key=lambda item: -item[1])
+    for table, col in columns:
+        shape = table.shapes[col]
+        if _fits(shape, target):
+            continue
+        own = next((form for form, _ in shape.held if _fits(form, target)), None)
+        chosen = own if own is not None else next((form for form, _ in shared), None)
+        if chosen is None:
+            _refuse(f"identifier column {_columns(ns)} has no format class held by --min-cell people in every "
+                    "column that shares its IDs")
+        table.shapes[col] = replace(chosen, held=shape.held, normalised=True)
 
 
 def _table_spec(fr: Any, ti: int, namespaces: dict[int, str], minimum: int) -> _Table:
@@ -280,22 +371,32 @@ def _columns(ns: IdNamespace) -> str:
 
 
 def _mint(ns: IdNamespace, n: int, minimum: int, seed: int, banned: set[str],
-          users: RealUsers, shapes: list[_Shape]) -> np.ndarray:
-    """Draw a bag from an aggregate format domain, never from ns.mapping."""
+          users: RealUsers, shapes: list[_Shape], target: tuple[str, str], prefix: str) -> np.ndarray:
+    """Draw a bag from an aggregate format domain, never from ns.mapping.
+
+    Every ID is minted in the namespace's ``target`` class (:func:`_target_class`): the IDs of a rare class or a
+    minority layout take it too (ADR-0004), so no rare source format class is drawn. ``prefix``: the letter
+    prefix patterned IDs keep (:func:`_target_prefix`).
+    """
     rng = stream(seed, "sharing_population", ns.key, "identifier_pool")
     if not n:
         return np.empty(0, dtype=object)
     if namespace_is_identity(ns):
         return rng.permutation(np.arange(1, n + 1, dtype=np.int64)).astype(object)
     reps = list(ns.representatives.values())
-    if all(_is_digit_rep(v) for v in reps):
-        widths = Counter(len(normalize_id(v)) for v in reps)
+    kind, layout = target
+    if kind == "digits":
+        digit_reps = [v for v in reps if _is_digit_rep(v)]
+        widths = Counter(len(normalize_id(v)) for v in digit_reps)
+        others = len(reps) - len(digit_reps)  # IDs of another layout, minted in the most common held width
         padded = [s.width for s in shapes if s.kind == "integer" and s.width]
         all_padded = all(s.kind == "integer" and s.width for s in shapes)
         if not all_padded:
             widths = _fold_widths(widths, minimum)
             if any(c < minimum for c in widths.values()):
                 _refuse(f"identifier column {_columns(ns)} has fewer than --min-cell ({minimum}) IDs")
+            if others:
+                widths[max(widths, key=lambda w: (widths[w], w))] += others
         # Padding hides significant width, and a rare unpadded width is folded into a common one, so no rare
         # original width is retained.
         sizes = ([min(padded)] * n if all_padded else
@@ -320,20 +421,12 @@ def _mint(ns: IdNamespace, n: int, minimum: int, seed: int, banned: set[str],
         else:
             values = allocate_digit_ids(tokens, nat, bounds, real, rng, notes, pad_limit=limit)
         return rng.permutation(values).astype(object)
-    if any(_is_digit_rep(v) for v in reps):
-        _refuse("mixed numeric and patterned identifier domains are unsupported in sharing")
-    hex_mode = all(is_hex_id(v) for v in reps)
-    masks = Counter(char_mask("".join(c for c in v if c.isalnum())).lower() for v in reps)
-    if not hex_mode and (len(masks) != 1 or any(c < minimum for c in masks.values())):
-        _refuse("patterned identifier classes cannot be protected while preserving these joins")
-    if hex_mode:
-        # UUID/hash character classes vary with the random digits, not with a donor.
-        rep = "".join("0" if c.isalnum() else c for c in sorted(reps)[0])
-        prefix = ""
+    if kind == "hex":
+        rep, prefix = layout, ""
     else:
-        prefix = ns.prefix
-        mask = next(iter(masks))
-        rep = prefix + mask[len(prefix):]
+        if sum(_id_class(v) == target for v in reps) < minimum:
+            _refuse("patterned identifier classes cannot be protected while preserving these joins")
+        rep = prefix + layout[len(prefix):]
     invented = IdNamespace(ns.key, representatives={f"slot:{i}": rep for i in range(n)})
     _pattern_mapping(invented, list(invented.representatives), banned, set(), rng,
                      prefix=prefix, stems=users.stems, text_taken=users.text_taken)
@@ -554,11 +647,15 @@ def plan_population(files: list[Any], seed: int, settings: Any, reg: IdRegistry,
                   if t.profile.private.extra.get(real_texts.RUN_KEY) is not None), None)
     users = RealUsers.of(all_ns, avoid_emails=real_texts.email_addresses(texts) if texts else (),
                          avoid_ids=other_ids, avoid_texts=texts)
-    pools = {}
+    pools, prefixes = {}, {}
     for key, ns in sorted(planned.items()):
-        forms = [table.shapes[col] for table in tables for col, k in table.namespaces.items()
-                 if k == key and col in table.shapes]
-        pools[key] = _mint(ns, sizes[root(key)], minimum, seed, banned, users, forms)
+        columns = [(table, col) for table in tables for col, k in table.namespaces.items()
+                   if k == key and col in table.shapes]
+        target = _target_class(ns, minimum)
+        _fit_shapes(ns, target, columns)
+        forms = [table.shapes[col] for table, col in columns]
+        prefixes[key] = _target_prefix(ns, target, banned, minimum)
+        pools[key] = _mint(ns, sizes[root(key)], minimum, seed, banned, users, forms, target, prefixes[key])
     plans = {}
     for table in tables:
         with _blame(table.key):
@@ -671,6 +768,14 @@ def plan_population(files: list[Any], seed: int, settings: Any, reg: IdRegistry,
                     f"counts and the row total kept; {people}")
             fr.messages = [m for m in fr.messages if not (m.code == REBALANCED_CODE and m.text == text)]
             fr.messages.append(Message("info", REBALANCED_CODE, text))
+        for col, shape in table.shapes.items():
+            column = table.profile.columns[col]
+            if table.namespaces[col] in prefixes:
+                # the leak scan reads usernames without the prefix the IDs were minted with (R5-02)
+                column.params["_id_prefix"] = prefixes[table.namespaces[col]]
+            if shape.normalised and not any(m.code == FORMAT_NORMALISED_CODE for m in column.messages):
+                column.messages.append(Message("info", FORMAT_NORMALISED_CODE, FORMAT_NORMALISED_TEXT,
+                                               column=column.name))
     for key, ns in planned.items():
         reg.namespaces[key].identity = ns.identity
     return plans

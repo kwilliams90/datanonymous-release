@@ -411,7 +411,8 @@ class HolderKeys:
     themselves, so over the run they rank as a claim, the fewest wins, never pooled with records and rows;
     ``detect.text.people_level``); ``rows_people`` (ADR-0006): the table has no person key and nothing suggests that
     a person appears on several rows (no column of repeated wide keys, ``detect.ids.REPEATED_KEYS_KEY``; no name or
-    e-mail column of the row's own person that repeats a value), so sharing mode counts each row as a different
+    e-mail column of the row's own person that repeats a value, except names beside an e-mail column of the row's own
+    person filled and different on every row: namesakes), so sharing mode counts each row as a different
     person IN THIS TABLE ONLY (``profile.sharing.record_evidence``; rows identical in every column still count once,
     :meth:`duplicates`). It never makes :attr:`people` true: over the run such counts stay counts of rows
     (``detect.text.people_level``), below every count of people.
@@ -548,33 +549,36 @@ def subject_named_header(name: str) -> bool:
     return False
 
 
+def _subject_key_kind(p: ColumnProfile) -> str | None:
+    """The kind of a person-name or e-mail column of the row's own person (:func:`subject_name_columns`):
+    ``'email'``, ``'full'`` (a whole name), ``'part'`` (first, middle or last name) or None for another column."""
+    from ..hints import header_hints
+
+    if not _subject_header(p.name):
+        return None
+    if p.role in ("excluded", "null") or (p.source in _FLAG_SOURCES and p.type not in (ColumnType.EMAIL,
+                                                                                       ColumnType.PERSON_NAME)):
+        hint = header_hints(p.name).pii
+    elif p.type is ColumnType.EMAIL:
+        return "email"
+    elif p.type is ColumnType.PERSON_NAME:
+        return "full" if p.subtype in (None, "full") else "part"
+    elif p.type in (ColumnType.HIGH_CARD_CATEGORICAL, ColumnType.FREE_TEXT):
+        hint = p.params.get("pii_hint")
+    else:
+        return None
+    return "email" if hint == "email" else ("full" if hint == "full_name" else "part" if hint in _NAME_HINTS else None)
+
+
 def subject_name_columns(profiles: list[ColumnProfile]) -> tuple[list[int], list[int]]:
     """D35: (whole-name and e-mail columns, name-part columns) of the row's own person (:func:`_subject_header`):
     PERSON_NAME and EMAIL columns, columns whose person-name or e-mail header made them invented labels, and
     excluded, nulled or flagged (``--force-factor`` ...) columns under such a header (their real values are still in
     the table). Name parts (first, middle, last) count together, as one name."""
-    from ..hints import header_hints
-
     whole: list[int] = []
     parts: list[int] = []
     for p in profiles:
-        if not _subject_header(p.name):
-            continue
-        if p.role in ("excluded", "null") or (p.source in _FLAG_SOURCES and p.type not in (ColumnType.EMAIL,
-                                                                                           ColumnType.PERSON_NAME)):
-            hint = header_hints(p.name).pii
-            kind = "email" if hint == "email" else ("full" if hint == "full_name" else
-                                                     "part" if hint in _NAME_HINTS else None)
-        elif p.type is ColumnType.EMAIL:
-            kind = "email"
-        elif p.type is ColumnType.PERSON_NAME:
-            kind = "full" if p.subtype in (None, "full") else "part"
-        elif p.type in (ColumnType.HIGH_CARD_CATEGORICAL, ColumnType.FREE_TEXT):
-            hint = p.params.get("pii_hint")
-            kind = "email" if hint == "email" else ("full" if hint == "full_name" else
-                                                     "part" if hint in _NAME_HINTS else None)
-        else:
-            kind = None
+        kind = _subject_key_kind(p)
         if kind == "part":
             parts.append(p.index)
         elif kind is not None:
@@ -683,7 +687,8 @@ def d35_keys(table: RawTable, profiles: list[ColumnProfile], ent: EntityProfile,
     would hardly make them identical (:meth:`HolderKeys.duplicates`: one record exported several times is one holder).
     Such a table's rows count as its people for sharing mode (``HolderKeys.rows_people``, ADR-0006) unless a column
     of repeated wide keys or a repeated name or e-mail address of the row's own person suggests that a person has
-    several rows; that never makes them people over the run.
+    several rows (a repeated name is no sign beside an e-mail column of the row's own person filled and different on
+    every row: the ADR-0006 amendment); that never makes them people over the run.
     """
     id_cols = [i for i in ent.id_columns if profiles[i].role == "id"]
     key_cols = id_cols + [p.index for p in profiles if p.index not in id_cols and shadow_id(p, settings)]
@@ -740,8 +745,16 @@ def d35_keys(table: RawTable, profiles: list[ColumnProfile], ent: EntityProfile,
              else "rows (the table has no ID column)")
     own_rows = any(_distinct_per_row(codes[j]) for j in own)
     # ADR-0006: a sign that a person has several rows (repeated wide ID-like keys, a repeated name or e-mail address
-    # of the row's own person); without one, sharing mode counts each row as a person within this table
-    repeats = any(p.params.get(REPEATED_KEYS_KEY) for p in profiles) or any(_repeats(codes[j]) for j in own)
+    # of the row's own person); without one, sharing mode counts each row as a person within this table. Amendment:
+    # an e-mail column of the row's own person filled and different on every row outranks the names, which are then
+    # namesakes; a repeated e-mail still is a sign. (An ID of the row's own person never reaches here: it counts the
+    # people itself. A record number, a bare SID or another person's ID is different on every row even when one
+    # person has several rows, so it never outranks the names.)
+    emails = [len(codes) - len(whole) - (1 if parts else 0) + k for k, i in enumerate(whole)
+              if _subject_key_kind(profiles[i]) == "email"]
+    unique_email = any(_unique_and_filled(codes[j]) for j in emails)
+    signs = [j for j in own if not unique_email or j in emails]
+    repeats = any(p.params.get(REPEATED_KEYS_KEY) for p in profiles) or any(_repeats(codes[j]) for j in signs)
     return HolderKeys(keys, False, basis, table=table, skip=frozenset(key_cols), own_rows=own_rows,
                       claimed=tuple(claimed), sids=sids, rows_people=not repeats)
 
@@ -824,6 +837,11 @@ def _repeats(codes: np.ndarray) -> bool:
     """ADR-0006: a key column (codes, -1 blank) holds one filled value on more than one row."""
     filled = codes[codes >= 0]
     return len(np.unique(filled)) < len(filled)
+
+
+def _unique_and_filled(codes: np.ndarray) -> bool:
+    """ADR-0006 amendment: a key column (codes, -1 blank) is filled and different on every row."""
+    return bool(len(codes)) and bool((codes >= 0).all()) and len(np.unique(codes)) == len(codes)
 
 
 def _distinct_per_row(codes: np.ndarray) -> bool:

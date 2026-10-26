@@ -171,10 +171,29 @@ SIGNS = {
     # a column of repeated wide ID-like keys (nulled, so D38 does not fail its file)
     "repeated ID-like keys": ({"Ref_Key": lambda i: str(830012345 + (i // 2) * 7919)},
                               {"null": [ColumnRef("Ref_Key")]}),
+    # ADR-0006 amendment: repeated names still block when no own-person key is unique and filled on every row
+    "repeated name, repeated e-mail": ({"Name": lambda i: _names(i // 2),
+                                        "Email": lambda i: f"person{i // 2}@example.org"}, {}),
+    "repeated name, e-mail with blanks": ({"Name": lambda i: _names(i // 2),
+                                           "Email": lambda i: "" if i % 10 == 0 else f"person{i}@example.org"}, {}),
+    # a record number is different on every row even when a person has several rows: no evidence of namesakes
+    "repeated name, record id": ({"id": lambda i: str(i + 1), "Name": lambda i: _names(i // 2)}, {}),
+    # a bare SID numbers sessions or visits as often as students
+    "repeated name, bare SID": ({"SID": lambda i: student_id(i), "Name": lambda i: _names(i // 2)}, {}),
+    # a repeated ID-like column is a sign even beside a unique e-mail
+    "repeated name, unique e-mail, repeated ID-like keys": (
+        {"Name": lambda i: _names(i // 2), "Email": lambda i: f"person{i}@example.org",
+         "Ref_Key": lambda i: str(830012345 + (i // 2) * 7919)}, {"null": [ColumnRef("Ref_Key")]}),
 }
 NO_SIGNS = {
     "distinct names": ({"Name": lambda i: _names(i)}, {}),
     "distinct e-mails": ({"Email": lambda i: f"person{i}@example.org"}, {}),
+    # ADR-0006 amendment: an own-person e-mail filled and different on every row makes repeated names namesakes
+    "repeated name, unique e-mail": ({"Name": lambda i: _names(i // 2),
+                                      "Email": lambda i: f"person{i}@example.org"}, {}),
+    "repeated first and last names, unique e-mail": (
+        {"First_Name": lambda i: _names(i // 2).split()[0], "Last_Name": lambda i: _names(i // 2).split()[1],
+         "Email": lambda i: f"person{i}@example.org"}, {}),
 }
 
 
@@ -204,6 +223,33 @@ def test_a_name_or_e_mail_column_that_never_repeats_is_no_sign(tmp_path, case):
     assert {row["Program"] for row in written} & set(COMMON)
     assert RARE not in _cells(out)
     assert ASSUMPTION in _attention(report)
+
+
+def test_repeated_names_beside_a_unique_own_person_id_do_not_block(tmp_path):
+    """ADR-0006 amendment, the ID side: an ID of the row's own person, different on every row, counts the people
+    itself, so the repeated names are namesakes and the table needs no assumption."""
+    original = tmp_path / "original"
+    _write(original / "programs.csv", _rows({"Student_ID": student_id, "Name": lambda i: _names(i // 2)}))
+    run, out, report = _run(original, tmp_path)
+    assert exit_code(run) == 0, [(m.code, m.text) for m in blocking_findings(run)]
+    written = read_records(out / "programs.csv")
+    assert {row["Program"] for row in written} - {""} <= set(COMMON)
+    assert {row["Program"] for row in written} & set(COMMON)
+    assert RARE not in _cells(out)
+    assert ASSUMPTION not in _attention(report)
+
+
+def test_student_scores_no_longer_fails_for_no_people(tmp_path):
+    """``example-data/student-scores.csv``: 2,000 rows, repeated first+last names, ``id`` and ``email`` unique."""
+    original = tmp_path / "original"
+    original.mkdir()
+    source = EXAMPLE.parent / "student-scores.csv"
+    shutil.copy(source, original / source.name)
+    run, _, report = _run(original, tmp_path)
+    assert "sharing_no_people" not in {m.code for m in blocking_findings(run)}
+    attention = _attention(report)
+    assert "sharing_no_people" not in attention
+    assert ASSUMPTION in attention
 
 
 # --------------------------------------------------------------------------- the assumption never crosses files

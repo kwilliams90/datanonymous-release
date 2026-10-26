@@ -12,3 +12,7 @@ The run reports the assumption under "What needs attention" and points to `--per
 - The assumption never crosses files. A row in one table says nothing about the people in another.
 - When there is a sign of repeated people, the table keeps the old behaviour: its columns that cannot be protected are nulled ([ADR-0001](0001-sharing-nulls-unprotectable-columns.md)).
 - The risk that remains is a table that repeats people with no visible sign: no ID, name or e-mail column. In that case a value held by one person on many rows could pass as common. That is why the assumption is reported every time it is used.
+
+## Amendment: unique person keys outrank name repeats
+
+A repeated person name is not a sign of repeats when an own-person e-mail or ID column is filled and different on every row of the table. Such a key is stronger evidence than a name, so the repeated names are namesakes. A repeated ID-like column, or an own-person e-mail or ID that repeats, is still a sign.

@@ -666,8 +666,8 @@ def generate_file(fr: FileResult, settings: Settings, run: RunResult, reg: IdReg
             dtypes.append(dt)
             fr.out_dtypes.append(dt)
             src_dt = fr.source_dtypes[t_i] if t_i < len(fr.source_dtypes) else None
-            for text in selfcheck.dtype_messages(src_dt, dt, st.header):
-                fr.messages.append(Message("warning", "dtype_mismatch", text))
+            for column, text in selfcheck.dtype_drift(src_dt, dt, st.header):
+                fr.messages.append(Message("warning", "dtype_mismatch", text, column=column))
         return docs.WrittenFile(fr, synth, fr.synthetic_stats, dtypes)
     except DatanonymousError as e:
         tmp.unlink(missing_ok=True)

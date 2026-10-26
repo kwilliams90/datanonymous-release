@@ -8,6 +8,7 @@ recipient sees: the output folder, the report folder and the exit code.
 from __future__ import annotations
 
 import csv
+import re
 from pathlib import Path
 
 import pytest
@@ -63,7 +64,8 @@ def _cli(original: Path, base: Path, *flags: str, seed: str | None = SEED):
 def _nulled_section(report: Path) -> dict[str, str]:
     md = (report / "REPORT.md").read_text(encoding="utf-8")
     assert "## Nulled columns" in md, md
-    section = md.split("## Nulled columns", 1)[1].split("\n## ", 1)[0]
+    # the section ends at the next heading of any level: the lines of later sections (notes, warnings) are not its own
+    section = re.split(r"\n#+ ", md.split("## Nulled columns", 1)[1], maxsplit=1)[0]
     return {line.split("`")[3]: line for line in section.splitlines() if line.startswith("- ")}
 
 

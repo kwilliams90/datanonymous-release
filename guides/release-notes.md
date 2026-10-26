@@ -1,5 +1,83 @@
 # Release candidate 0.1.0rc3
 
+Sharing mode now tries to make each file work while still never releasing a
+real value. The decisions are in `docs/adr/` and the terms in `GLOSSARY.md`.
+
+Columns it cannot protect
+- A non-key column that sharing mode cannot protect (for example a parent's
+  education level, a column with too few people behind its values, a number
+  that looks like an ID but is not used as a key) is written as a Nulled
+  column: header and position kept, every cell empty. Before, one such column
+  left the whole file out. The column is listed under "What needs attention"
+  with a plain reason and, for an ID-like column, the suggestion to declare it
+  with `--id-col`. The report tells columns you nulled with `--null` from
+  columns nulled automatically.
+- A blocking finding about one such column that appears only after the file is
+  generated (a possible ID or code, a leak-scan hit in one column) nulls that
+  column and generates the file again with the same seed. Findings about whole
+  rows or the whole file still withhold the file, and so do findings on a key
+  or on a column in a join, dependency, template, composite key or declared
+  rule. If nulling does not clear the findings, the file is left out.
+- A run whose only problems are automatically Nulled columns exits 0 and
+  counts as written for `--all-or-nothing`.
+- New `--refuse-unsupported` option (and config key `refuse_unsupported`):
+  leave the file out instead, as in earlier releases (exit 3; with
+  `--all-or-nothing`, nothing is written).
+
+Fewer files and tables left out
+- A table with a rows-per-person count class held by fewer than `--min-cell`
+  people is rebalanced instead of left out: the rows of rare count classes move
+  to the nearest classes that enough people hold, and the row total stays
+  exact. The number of fictional people in the table may differ from the
+  source; the private report says by how many. The table is still left out
+  when no count class is held or the row total cannot be met exactly.
+- A rare ID format class, including a minority layout in a mixed ID column, is
+  written in the column's most common held format class, and joins stay valid.
+  A column with no held format class, or made of e-mail addresses, is still
+  refused.
+- A rare text shape (such as `AA-0000`) is written without its leading-digit
+  and length detail, or else in the column's most common held shape. A rare
+  date format is written in the column's most common held date format. A shape
+  defined by embedded personal information is not broadened: a non-key column
+  like that is nulled.
+- Currency, grouped, suffixed, parenthesised-negative and zero-scale decimal
+  columns get the same rare-value suppression and extreme removal as plain
+  integers, and are written in their own format, instead of refusing. A
+  possible-ID number column that is not a key is nulled and the report suggests
+  declaring it as an ID.
+
+Reports and run folders
+- `REPORT.md` and the console summary have the same three headings: "What was
+  generated", "What changed" and "What needs attention". Every problem is a
+  plain sentence with a plain fix; message codes, the verdict and criteria
+  table, per-file checks, statistics and the full skip list moved to an
+  Appendix, and the code stays next to the sentence it explains.
+- Non-table inputs (PDFs, images, Word documents) are one routine line with
+  counts by type. An input that looks like a table but could not be read is
+  listed under "What needs attention".
+- "What changed" lists the deliberate privacy changes per column (dates
+  shifted, rare categories merged, numeric extremes removed, counts
+  rebalanced, formats broadened, Nulled columns). The output folder's README
+  gains a short "What changed" list without counts, reasons or source facts.
+- A user config file (`config.yaml` in the `datanonymous` folder of your
+  platform's user config folder, or in `DATANONYMOUS_CONFIG_DIR`) is loaded
+  automatically. Precedence: defaults, user config, `--config`, command line.
+  The run summary names the config file it loaded.
+- New config keys `output_root` and `report_root`: a run without `--out-dir`
+  writes to `<output_root>/<input-name>-<YYYYMMDD-HHMMSS>/` and its report to
+  `<report_root>/<same name>/`, with `-2`, `-3` on a name collision.
+  `--out-dir` and `--report-dir` override them. `output_root` without
+  `report_root` is refused, as are roots that sit inside one another or inside
+  the input.
+- Both destinations are printed at the start and end of a run, labelled
+  `Shareable synthetic files` and `PRIVATE report - do not share`. `REPORT.md`
+  opens with a `PRIVATE – DO NOT SHARE` banner and the report folder holds a
+  `PRIVATE-DO-NOT-SHARE.txt` marker (never written to the output folder).
+- Every blocking or failure message has a plain-language entry in a message
+  catalogue, enforced by a test.
+
+Earlier rc3 changes
+
 - A numeric ID column whose IDs differ in length (say 4 to 8 digits) no longer
   fails in sharing mode when some length is held by fewer than `--min-cell`
   IDs: those IDs get the nearest length that enough IDs hold.

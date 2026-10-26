@@ -152,3 +152,37 @@ def test_a_code_registered_as_a_change_appears_without_report_code(tmp_path, mon
     assert "Something was deliberately altered for the test." in _changed(md)
     assert "internal detail 42" not in _changed(md)
     assert "Something was deliberately altered" not in _section(md, "What needs attention")
+
+
+def _run_with_whole_scores(base: Path):
+    """Other_Score becomes whole numbers: eight values seen once each (rare numeric values), the rest common."""
+    original = base / "original"
+    _roster(original)
+    path = original / "roster.csv"
+    with path.open("r", encoding="utf-8", newline="") as stream:
+        rows = list(csv.reader(stream))
+    for i, row in enumerate(rows[1:]):
+        row[4] = str(60 + (i * 7) % 35) if i >= 8 else str(200 + i)
+    with path.open("w", encoding="utf-8", newline="") as stream:
+        csv.writer(stream, lineterminator="\n").writerows(rows)
+    out, report = base / "synthetic", base / "local-report"
+    result = CliRunner().invoke(main, [str(original), "--out-dir", str(out), "--report-dir", str(report),
+                                       "--seed", "573291"], catch_exceptions=False)
+    return result, out, report
+
+
+def test_a_numeric_column_reports_rare_values_and_a_categorical_one_reports_rare_categories(tmp_path):
+    result, out, report = _run_with_whole_scores(tmp_path)
+    assert result.exit_code == 0, result.output
+    lines = [ln for ln in _changed((report / "REPORT.md").read_text(encoding="utf-8")).splitlines()
+             if ln.startswith("- ")]
+    scores = [ln for ln in lines if "Other_Score" in ln and "rare" in ln]
+    assert len(scores) == 1, lines
+    assert "8 rare values replaced with common ones" in scores[0] and "categor" not in scores[0], scores
+    programs = [ln for ln in lines if "Program" in ln and "rare" in ln]
+    assert len(programs) == 1 and "4 rare categories merged into common ones" in programs[0], lines
+    assert "8 rare values replaced with common ones" in result.output
+    readme = _changed((out / "README.md").read_text(encoding="utf-8"))
+    assert "rare values replaced with common ones" in readme
+    assert "rare categories merged into common ones" in readme
+    assert "rare categories" not in readme.split("Other_Score", 1)[1].splitlines()[0]

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from decimal import Decimal
 from typing import Any
 
 import numpy as np
@@ -25,7 +26,10 @@ def discrete(profile: ColumnProfile) -> bool:
 
 
 def normalized_key(profile: ColumnProfile, raw: Any) -> str | None:
-    value = exact_value(raw, profile)
+    # an already parsed value is not read again through the column's format ($, %, grouping), which it lacks
+    value = raw if isinstance(raw, Decimal) else exact_value(raw, profile)
+    if value is not None and not value.is_finite():
+        return None
     if value is None:
         return None
     if not value:

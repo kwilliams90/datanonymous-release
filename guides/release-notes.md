@@ -19,6 +19,8 @@
   selection still blocks the output.
 - Sharing mode no longer suggests options it refuses (`--force-factor`,
   `--org-code`, `--keep-name`).
+- A formatted number column with decimals, such as `$1,234.50` or `12.5%`, no
+  longer stops sharing mode with an internal error.
 
 # Release candidate 0.1.0rc2
 

@@ -338,6 +338,19 @@ def test_too_many_labels_is_written_with_no_option_sharing_refuses(tmp_path):
     assert "--force-factor" not in fixes and "--org-code" not in fixes
 
 
+def test_currency_with_cents_is_written_in_its_format(tmp_path):
+    # invented amounts; the extremes were read back through the "$" format and crashed (TypeError) before
+    original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
+    original.mkdir()
+    amounts = [52000 + (i * 7919) % 30000 + (i % 100) / 100 for i in range(300)]
+    _write_csv(original / "pay.csv", [{"Student_ID": f"S{i:05d}", "Grade": str(6 + i % 4), "Amount": f"${a:,.2f}"}
+                                      for i, a in enumerate(amounts)])
+    run = execute(Settings(mode="sharing", seed=1), original, output, report)
+    assert run.package["released"], (_diagnostic(run), [f.reasons for f in run.files])
+    written = [r["Amount"] for r in read_records(output / "pay.csv")]
+    assert all(v.startswith("$") and "," in v and v[-3] == "." for v in written)
+
+
 def test_all_or_nothing_withholds_every_table_when_the_population_refuses_one(tmp_path):
     original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
     write_corpus(original, "thirteen_events")

@@ -150,6 +150,8 @@ problem("id_check_not_applied", "The ID check digit you asked for was not applie
         "Check the IDs in the source, or remove the `--id-check` option.")
 change("column_nulled_automatically",
        "A column that could not be shared safely was written with every cell empty, so none of its real values are released.")
+change("id_format_normalised",
+       "IDs in a rare format were written in the column's most common format, so no rare ID format is released.")
 problem("id_width_changed", "The IDs in the shared copy have a different length from the real ones.",
         "No action is needed unless you need the original length; then leave the column out with `--exclude`.")
 problem("composite_key_duplicates", "Some rows repeat a combination of columns that is meant to be unique.",

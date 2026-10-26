@@ -200,8 +200,8 @@ def test_rare_iep_vocabulary_cannot_borrow_common_roster_holders(tmp_path):
 
 @pytest.mark.parametrize("variant, diagnostic, refused", [
     ("thirteen_events", "count class", {"events.csv"}),
-    # the rare ID's holder is in the roster and in discipline; IEP and events refer to the roster
-    ("rare_id", "format class", {"roster.csv", "discipline.csv"}),
+    # the e-mail ID's holder is in the roster and in discipline; IEP and events refer to the roster
+    ("email_id", "e-mail", {"roster.csv", "discipline.csv"}),
 ])
 def test_rare_person_count_and_identifier_shape_leave_out_only_the_offending_tables(tmp_path, variant, diagnostic,
                                                                                     refused):
@@ -225,10 +225,26 @@ def test_rare_person_count_and_identifier_shape_leave_out_only_the_offending_tab
             assert all(relation[r["Student_ID"]] == (r["State_Student_ID"], r["Family_ID"]) for r in rows)
 
 
+def test_a_rare_id_layout_is_written_in_the_held_layout_in_every_table(tmp_path):
+    # ADR-0004: the rare ID's holder (in the roster and in discipline) gets a fictional ID in the held layout
+    original, output, _, run = _execute(tmp_path, "rare_id")
+    assert run.package["released"], _diagnostic(run)
+    assert exit_code(run) == 0
+    assert set(hash_inventory(output)) == {*corpus_rows("rare_id"), *DOCS}
+    source_ids = {r["Student_ID"] for r in read_records(original / "roster.csv")}
+    written = {name: read_records(output / name) for name in corpus_rows("rare_id")}
+    ids = [r["Student_ID"] for rows in written.values() for r in rows]
+    assert {(len(i), i[0], i[1:].isdigit()) for i in ids} == {(7, "S", True)}
+    assert not set(ids) & source_ids
+    roster = {r["Student_ID"] for r in written["roster.csv"]}
+    assert len(roster) == PERSON_COUNT
+    assert all({r["Student_ID"] for r in rows} <= roster for rows in written.values())
+
+
 def test_tables_whose_join_target_is_left_out_are_planned_without_that_join(tmp_path):
-    # rare_id: the roster (the rare ID's holder) is left out. IEP and events join to it, so each keeps its rows and
-    # is planned over the IDs the remaining tables hold, whose format class no longer includes the rare holder's.
-    _, output, _, run = _execute(tmp_path, "rare_id")
+    # email_id: the roster (the e-mail ID's holder) is left out. IEP and events join to it, so each keeps its rows
+    # and is planned over the IDs the remaining tables hold.
+    _, output, _, run = _execute(tmp_path, "email_id")
     assert run.package["released"], _diagnostic(run)
     for name in ("iep.csv", "events.csv"):
         fr = next(f for f in run.files if f.rel_path == name)
@@ -251,13 +267,13 @@ def _write_csv(path: Path, rows: list[dict[str, str]]) -> None:
 
 
 def test_row_numbers_left_without_their_roster_are_not_kept_as_row_numbers(tmp_path):
-    # The roster's Student_ID is the row numbers 1..100 (kept as they are, D9); its rare State_Student_ID format
+    # The roster's Student_ID is the row numbers 1..100 (kept as they are, D9); an e-mail State_Student_ID
     # leaves it out. The child's 31..50 are not row numbers on their own: they get fictional IDs that are no real ID
     # of the run, and the left-out roster's 1..100 range does not show through.
     original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
     original.mkdir()
     state = [f"T{720007 + i * 41:06d}" for i in range(100)]
-    state[0] = "XX-901234"
+    state[0] = "pat.quill@example.org"
     _write_csv(original / "roster.csv", [
         {"Student_ID": str(i + 1), "State_Student_ID": state[i], "Grade": str(6 + i % 4),
          "Score": f"{(5500 + (i * 71) % 3500) / 100:.2f}"} for i in range(100)])
@@ -268,7 +284,7 @@ def test_row_numbers_left_without_their_roster_are_not_kept_as_row_numbers(tmp_p
     run = execute(Settings(mode="sharing", seed=573291), original, output, report)
     assert run.package["released"], _diagnostic(run)
     assert {f.rel_path for f in run.files if not f.written} == {"roster.csv"}
-    assert any("format class" in r for r in next(f for f in run.files if f.rel_path == "roster.csv").reasons)
+    assert any("e-mail" in r for r in next(f for f in run.files if f.rel_path == "roster.csv").reasons)
     ids = [r["Student_ID"] for r in read_records(output / "services.csv")]
     assert len(set(ids)) == 20
     assert not set(ids) & set(child_ids)

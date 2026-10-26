@@ -212,9 +212,29 @@ def test_a_generation_error_naming_a_non_key_column_nulls_it(tmp_path, monkeypat
     assert rounds == ["Other_Score"]
 
 
-@pytest.mark.parametrize("column", ["Student_ID", "Homeroom"], ids=["key", "dependency"])
 @pytest.mark.parametrize("check", ["leak", "verify"])
-def test_the_same_on_a_key_or_relationship_column_still_leaves_the_file_out(tmp_path, monkeypatch, column, check):
+def test_the_same_on_a_dependency_column_nulls_it_and_reports_the_link(tmp_path, monkeypatch, check):
+    """ADR-0001 amendment: Homeroom's only relationship (it follows from Locker) stays inside the table."""
+    original = tmp_path / "original"
+    source = _roster(original)
+    _scores(original)
+    real = _leak_real_values(monkeypatch, source, "Homeroom")
+    if check == "leak":
+        _scan_finds(monkeypatch, real, "Homeroom")
+    else:
+        _verify_finds(monkeypatch, real, "Homeroom", written=False)
+    result, out, report = _cli(original, tmp_path)
+    assert result.exit_code == 0, result.output
+    assert all(row["Homeroom"] == "" and row["Locker"] for row in read_records(out / "roster.csv"))
+    assert not [v for v in real if v in _text(out)]
+    assert "automatically" in _nulled_section(report)["Homeroom"]
+    md = (report / "REPORT.md").read_text(encoding="utf-8")
+    assert "the link between Locker and Homeroom is not kept" in md.split("## What changed", 1)[1].split("\n## ", 1)[0]
+
+
+@pytest.mark.parametrize("check", ["leak", "verify"])
+def test_the_same_on_a_key_column_still_leaves_the_file_out(tmp_path, monkeypatch, check):
+    column = "Student_ID"
     original = tmp_path / "original"
     source = _roster(original)
     _scores(original)

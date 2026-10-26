@@ -145,19 +145,20 @@ def test_the_same_rare_note_without_personal_data_is_broadened(tmp_path):
     assert [m.column for f in run.files for m in f.all_messages() if m.code == CHANGE_CODE] == ["Plan_Note"]
 
 
-def test_a_rare_class_defined_by_an_embedded_e_mail_still_refuses_a_column_in_a_relationship(tmp_path):
-    # Plan_Note is determined by Advisory (a dependency), so nulling it would break that relationship; it comes
-    # first, so its own refusal is the one the run reports
+def test_a_rare_class_defined_by_an_embedded_e_mail_in_a_dependency_nulls_the_column(tmp_path):
+    # Plan_Note is determined by Advisory, a dependency inside the table: its rare class is never broadened, and
+    # (ADR-0001 amendment) the column is nulled, not the file left out; the link is reported as not kept
     def note(i: int) -> str:
         group = i // 6
         return f"Met to plan week {10 + group}" + (f" with x{chr(97 + group)}q@commx.test" if group == 9 else "")
 
     _, run, out, report = _run(tmp_path, Plan_Note=note, Advisory=lambda i: f"A{101 + i // 6}")
     roster = next(f for f in run.files if f.rel_path == "roster.csv")
-    assert not roster.written and exit_code(run) == 3
-    assert not (out / "roster.csv").exists()
-    failures = (report / "sharing-failures.csv").read_text(encoding="utf-8")
-    assert "roster.csv" in failures and "sharing_rare_class" in failures, failures
+    assert roster.written and exit_code(run) == 0
+    assert all(row["Plan_Note"] == "" for row in read_records(out / "roster.csv"))
+    assert "commx.test" not in "\n".join(p.read_text(encoding="utf-8") for p in out.rglob("*") if p.is_file())
+    md = (report / "REPORT.md").read_text(encoding="utf-8")
+    assert "Plan_Note" in md and "is not kept" in md.split("## What changed", 1)[1].split("\n## ", 1)[0]
 
 
 def test_refuse_unsupported_does_not_stop_broadening(tmp_path):

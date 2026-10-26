@@ -163,6 +163,8 @@ change("count_classes_rebalanced",
        "is shared by enough people; the table's row total is unchanged, but its number of people may differ.")
 change("column_nulled_automatically",
        "A column that could not be shared safely was written with every cell empty, so none of its real values are released.")
+change("link_not_kept",
+       "A link between columns of this file is not kept, because a column in it was written with every cell empty.")
 change("id_format_normalised",
        "IDs in a rare format were written in the column's most common format, so no rare ID format is released.")
 change("id_width_changed", "IDs were written with a different length from the real ones, so they cannot be real IDs.")

@@ -963,9 +963,17 @@ def execute(settings: Settings, input_path: Path, out_dir: Path | None = None, r
         # ADR-0001: columns whose blocking findings were their file's only ones are nulled and the whole run planned
         # and written again (same seed), so every run-wide plan sees them as nulled. Each attempt nulls columns not
         # nulled before (a finding on a column already nulled withholds its file), so the attempts end.
+        from .profile.sharing import with_lost_links
+
+        by_path = {fr.rel_path: fr for fr in run.files}
         for path, tables in requests.items():
             for t_i, columns in tables.items():
-                auto_null.setdefault(path, {}).setdefault(t_i, {}).update(columns)
+                # the relationships inside the table each nulled column loses, read before the next attempt's profile
+                # finds none of them (ADR-0001 amendment)
+                tp = by_path[path].tables[t_i] if path in by_path and t_i < len(by_path[path].tables) else None
+                auto_null.setdefault(path, {}).setdefault(t_i, {}).update(
+                    (i, with_lost_links(tp, i, request) if tp is not None and i < len(tp.columns) else request)
+                    for i, request in columns.items())
         # a file left out after planning: plan and write the others again without it (same seed), so no plan
         # (the row numbers 1..n kept, D9; the real texts it would have written) assumes it was written
         if not settings.all_or_nothing:

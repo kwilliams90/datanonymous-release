@@ -61,7 +61,8 @@ def forbidden_extremes(profile: ColumnProfile) -> frozenset[str]:
 
 def _refuse(profile: ColumnProfile) -> None:
     raise GenerationError(f"sharing mode: column {profile.name!r} has no feasible numeric support after removing unsupported original extrema",
-                          fix=f"--null {profile.name} or --exclude {profile.name}")
+                          fix=f"--null {profile.name} or --exclude {profile.name}",
+                          code="sharing_numeric_no_support", column=profile.name)
 
 
 def protect_model(profile: ColumnProfile, model: ColumnModel, forbidden: frozenset[str]) -> ColumnModel:

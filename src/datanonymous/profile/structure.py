@@ -2465,7 +2465,7 @@ _RULE_FIX = {
 
 def _fail_file(fr: Any, reason: str, fix: str) -> None:
     if hasattr(fr, "fail"):
-        fr.fail(reason, fix)
+        fr.fail(reason, fix, "rule_unusable")
     else:  # minimal stand-ins (tests)
         fr.failed = True
 

@@ -7,6 +7,7 @@ a successful privacy check.
 
 from __future__ import annotations
 
+import re
 from typing import Any, Iterable
 
 from ..errors import UsageError
@@ -20,6 +21,20 @@ POLICY_VERSION = "1"
 #: column is written as generated text and no real label is kept; the leak scan still checks it.
 UTILITY_WARNINGS = frozenset({"fidelity_drift", "extremes_not_emitted", "panel_detected",
                               "id_width_changed", "dtype_mismatch", "factor_overflow"})
+
+
+#: options that sharing mode refuses (or refuses in the form a fix would suggest them): a sharing-mode message never
+#: tells the operator to use one of these
+REFUSED_SUGGESTIONS = frozenset({
+    "--force-factor", "--force-text", "--force-type", "--keep-name", "--keep-titles", "--force", "--no-strict",
+    "--no-default-ids", "--org-code", "--min-cell", "--max-row-matches", "--no-exact-extremes",
+})
+
+
+def names_refused_option(text: str | None) -> bool:
+    """Whether ``text`` suggests an option that sharing mode refuses."""
+    return bool(text) and any(
+        re.search(rf"(?<![\w-]){re.escape(flag)}(?![\w-])", text) for flag in REFUSED_SUGGESTIONS)
 
 
 def validate_settings(settings: Any) -> None:

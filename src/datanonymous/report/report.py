@@ -73,12 +73,14 @@ from typing import Any, Iterable
 import numpy as np
 
 from .. import __version__
+from .. import messages as catalogue
 from ..config import Settings
 from ..detect.text import na_pseudonymized, pseudonymized
 from ..generate import numeric as numeric_gen
 from ..generate.table import is_level_generated
 from ..model import FileResult, Message, RunResult, Status, TableProfile
 from ..paths import replace_bytes
+from ..privacy.sharing_policy import names_refused_option
 from ..privacy.leaks import KIND_TEXT, LEAK_PREFIX, UNVERIFIED_TEXT, sensitive_columns
 from ..profile import structure as structure_mod
 from . import selfcheck
@@ -398,6 +400,48 @@ def message_public(m: Message, candidates: Iterable[str] = ()) -> dict[str, Any]
     return out
 
 
+# --------------------------------------------------------------------------- plain-language findings
+def plain_finding(code: str, level: str, text: str, fix: str | None, sharing: bool,
+                  cands: Iterable[str] = (), markdown: bool = True) -> tuple[str, str]:
+    """(text, fix) of a finding as the operator should read it; the fix is '' when there is none.
+
+    In sharing mode a blocking or failure code that the message catalogue knows is shown as its plain sentence
+    and plain fix, with the code next to the sentence in parentheses. Anything else keeps its own text, and a fix
+    that names an option sharing mode refuses is never shown.
+    """
+    if sharing and level in ("warning", "error"):
+        shown = catalogue.render(code, _md(text) if markdown else text)
+        if shown is not None:
+            sentence, plain_fix = shown
+            if code == "fail" and fix and not names_refused_option(fix):
+                plain_fix = fix_markdown(fix, cands) if markdown else fix_plain(fix, cands)
+            elif not markdown and plain_fix:
+                plain_fix = plain_fix.replace("`", "")
+            if not markdown:
+                sentence = sentence.replace("`", "")
+            coded = f"{sentence.rstrip('.')} ({code_span(code) if markdown else code})."
+            return coded, plain_fix or ""
+    if sharing and names_refused_option(fix):
+        fix = None
+    if markdown:
+        return _period(fix_markdown(text, cands)), fix_markdown(fix, cands)
+    return text, fix_plain(fix, cands)
+
+
+def failure_findings(fr: FileResult, sharing: bool, cands: Iterable[str] = (),
+                     markdown: bool = True) -> list[tuple[str, str]]:
+    """(text, fix) for each reason a file FAILed, with the catalogue's plain wording in sharing mode."""
+    errors = {m.text: m for m in fr.messages if m.level == "error"}
+    out = []
+    for i, reason in enumerate(fr.reasons):
+        m = errors.get(reason)
+        if m is None:
+            fix = fr.fixes[i] if i < len(fr.fixes) and len(fr.fixes) == len(fr.reasons) else None
+            m = Message("error", "fail", reason, fix=fix)
+        out.append(plain_finding(m.code, "error", reason, m.fix, sharing, cands, markdown))
+    return out
+
+
 # --------------------------------------------------------------------------- per-file checks (verdict)
 def _worst(results: Iterable[str]) -> str:
     best = NA
@@ -711,7 +755,7 @@ def _summary_cell(st: dict[str, Any] | None) -> str:
     return ""
 
 
-def file_markdown(fr: FileResult, min_cell: int = 10) -> str:
+def file_markdown(fr: FileResult, min_cell: int = 10, sharing: bool = False) -> str:
     cands = _candidates(fr)
     lines = [f"# {fr.rel_path}", "", f"- Status: **{fr.status.value}**",
              f"- Output: {code_span(fr.out_rel_path)}" + ("" if fr.written else " (not written)"),
@@ -727,10 +771,16 @@ def file_markdown(fr: FileResult, min_cell: int = 10) -> str:
         lines.append(f"- Layout: encoding {lay['encoding']}, BOM {'yes' if lay['bom'] else 'no'}"
                      + (f", delimiter {t.get('delimiter')!r}, line ending {t.get('line_ending')}, quoting "
                         f"{t.get('quoting')}" if t else ""))
-    for r in fr.reasons:
-        lines.append(f"- Reason: {_md(r)}")
-    for f in fr.fixes:
-        lines.append(f"- Fix: {fix_markdown(f, cands)}")
+    if sharing:
+        for text, fix in failure_findings(fr, True, cands):
+            lines.append(f"- Reason: {text}")
+            if fix:
+                lines.append(f"- Fix: {fix}")
+    else:
+        for r in fr.reasons:
+            lines.append(f"- Reason: {_md(r)}")
+        for f in fr.fixes:
+            lines.append(f"- Fix: {fix_markdown(f, cands)}")
     lines += ["", "## Checks", "", "| Check | Key | Result | Detail |", "|---|---|---|---|"]
     checks = file_checks(fr)
     for key, title, _ in CRITERIA:
@@ -747,8 +797,8 @@ def file_markdown(fr: FileResult, min_cell: int = 10) -> str:
         lines += ["## Messages", ""]
         for m in msgs:
             col = f" [{_md(m.column)}]" if m.column else ""
-            fix = f" Fix: {fix_markdown(m.fix, cands)}" if m.fix else ""
-            lines.append(f"- {m.level.upper()}{col} {_period(fix_markdown(m.text, cands))}{fix}")
+            text, fix = plain_finding(m.code, m.level, m.text, m.fix, sharing, cands)
+            lines.append(f"- {m.level.upper()}{col} {text}" + (f" Fix: {fix}" if fix else ""))
         lines.append("")
     return "\n".join(lines)
 
@@ -958,7 +1008,8 @@ def failures_csv(run: RunResult) -> str:
     writer.writerow(["input_path", "outcome", "reason"])
     for fr in run.files:
         if fr.failed:
-            writer.writerow([fr.rel_path, "failed", "; ".join(dict.fromkeys(fr.reasons))])
+            plain = [text if not fix else f"{text} {fix}" for text, fix in failure_findings(fr, True, markdown=False)]
+            writer.writerow([fr.rel_path, "failed", "; ".join(dict.fromkeys(plain))])
     for s in run.skipped:
         writer.writerow([s.rel_path, "skipped", s.reason])
     return buf.getvalue()
@@ -996,7 +1047,7 @@ def build_report(run: RunResult, settings: Settings) -> dict[str, bytes]:
     for fr in run.files:
         base = str(PurePosixPath("files", fr.rel_path))
         files[base + ".json"] = _json(file_json(fr, min_cell)).encode("utf-8")
-        files[base + ".md"] = file_markdown(fr, min_cell).encode("utf-8")
+        files[base + ".md"] = file_markdown(fr, min_cell, run.data_mode == "sharing").encode("utf-8")
     for m in _redactors(run):
         files = m.redact_payload(files)
     return files
@@ -1018,6 +1069,7 @@ def write_report(run: RunResult, settings: Settings) -> None:
 
 
 def run_markdown(run: RunResult, data: dict[str, Any]) -> str:
+    sharing = run.data_mode == "sharing"
     v = data["verdict"]
     t = data["totals"]
     lines = ["# datanonymous run report", "", "## Verdict", "", f"Overall verdict: {v['overall']}", "",
@@ -1088,6 +1140,13 @@ def run_markdown(run: RunResult, data: dict[str, Any]) -> str:
         lines += ["## Failures", ""]
         for f in data["failures"]:
             cands = _candidates(by_source.get(f["source"]))
+            if sharing and by_source.get(f["source"]) is not None:
+                found = failure_findings(by_source[f["source"]], True, cands)
+                lines.append(f"- {code_span(_md(f['source']))}: not written. Reason: "
+                             + " ".join(dict.fromkeys(text for text, _ in found)))
+                for fx in dict.fromkeys(fix for _, fix in found if fix):
+                    lines.append(f"  - Fix: {fx}")
+                continue
             lines.append(f"- {code_span(_md(f['source']))}: not written. Reason: {_md('; '.join(f['reasons']))}")
             for fx in dict.fromkeys(f["fixes"]):
                 lines.append(f"  - Fix: {fix_markdown(fx, cands)}")
@@ -1096,8 +1155,8 @@ def run_markdown(run: RunResult, data: dict[str, Any]) -> str:
     if data["errors"]:
         lines += ["## Run errors", ""]
         for e in data["errors"]:
-            fix = f" Fix: {fix_markdown(e['fix'], run_cands)}" if e.get("fix") else ""
-            lines.append(f"- {_period(_md(e['text']))}{fix}")
+            text, fix = plain_finding(e["code"], "error", e["text"], e.get("fix"), sharing, run_cands)
+            lines.append(f"- {text}" + (f" Fix: {fix}" if fix else ""))
         lines.append("")
     if data["warnings"]:
         lines += ["## Warnings", ""]
@@ -1105,8 +1164,8 @@ def run_markdown(run: RunResult, data: dict[str, Any]) -> str:
             where = code_span(_md(w["file"])) if w.get("file") else "run"
             col = f" [{_md(w['column'])}]" if w.get("column") else ""
             cands = _candidates(by_source.get(w.get("file"))) if w.get("file") else run_cands
-            fix = f" Fix: {fix_markdown(w['fix'], cands)}" if w.get("fix") else ""
-            lines.append(f"- {where}{col}: {_period(fix_markdown(w['text'], cands))}{fix}")
+            text, fix = plain_finding(w["code"], "warning", w["text"], w.get("fix"), sharing, cands)
+            lines.append(f"- {where}{col}: {text}" + (f" Fix: {fix}" if fix else ""))
         lines.append("")
     notes = [n for n in data.get("notes") or [] if n.get("code") != "extreme_exposure"]
     out_notes: list[str] = []
@@ -1147,7 +1206,12 @@ def console_summary(run: RunResult) -> list[str]:
         rows = sum(t.n_rows for t in fr.tables) if fr.tables else 0
         ncol = sum(len(t.columns) for t in fr.tables) if fr.tables else 0
         cands = _candidates(fr)
-        if fr.failed:
+        if fr.failed and run.data_mode == "sharing":
+            found = failure_findings(fr, True, cands, markdown=False)
+            fixes = list(dict.fromkeys(fix for _, fix in found if fix))
+            lines.append(f"  FAIL  {fr.rel_path}  (not written): {' '.join(dict.fromkeys(t for t, _ in found))}"
+                         + (f"  fix: {'; '.join(fixes)}" if fixes else ""))
+        elif fr.failed:
             fixes = [fix_plain(f, cands) for f in dict.fromkeys(fr.fixes)]
             lines.append(f"  FAIL  {fr.rel_path}  (not written): {'; '.join(fr.reasons)}"
                          + (f"  fix: {'; '.join(fixes)}" if fixes else ""))
@@ -1159,7 +1223,8 @@ def console_summary(run: RunResult) -> list[str]:
         lines.append(f"  SKIP  {s.rel_path}  ({s.reason})")
     for m in run.messages:
         if m.level != "info":
-            lines.append(f"  {m.level.upper()}: {m.text}")
+            text, fix = plain_finding(m.code, m.level, m.text, m.fix, run.data_mode == "sharing", markdown=False)
+            lines.append(f"  {m.level.upper()}: {text}" + (f"  fix: {fix}" if fix and run.data_mode == "sharing" else ""))
     t = run.totals()
     lines.append(f"Totals: {t['files']} file(s): {t['PASS']} PASS, {t['WARN']} WARN, {t['FAIL']} FAIL; "
                  f"{t['skipped']} skipped")

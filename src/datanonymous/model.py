@@ -682,14 +682,16 @@ class FileResult:
     def failed(self) -> bool:
         return self.status is Status.FAIL
 
-    def fail(self, reason: str, fix: str | None = None) -> None:
+    def fail(self, reason: str, fix: str | None = None, code: str | None = None,
+             column: str | None = None) -> None:
+        """FAIL the file. ``code`` names the message-catalogue entry that explains it in plain language."""
         self.clear_reread()
         self.status = Status.FAIL
         self.written = False
         self.reasons.append(reason)
         if fix:
             self.fixes.append(fix)
-        self.messages.append(Message("error", "fail", reason, fix=fix))
+        self.messages.append(Message("error", code or "fail", reason, column=column, fix=fix))
 
     def all_messages(self) -> list[Message]:
         out = list(self.messages)

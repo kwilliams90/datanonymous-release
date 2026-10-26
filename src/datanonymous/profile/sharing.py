@@ -1,7 +1,8 @@
 """Private generation views for sharing: local-person rare-unit suppression (D42/43).
 
-Capture evidence while raw rows exist. Never infer people from row counts or
-borrow holders from a sibling fact table or a code lookup. Source profiles and
+Capture evidence while raw rows exist. Never borrow holders from a sibling fact
+table or a code lookup. Rows count as people only within their own table, when
+it has no person column and nothing suggests repeats (ADR-0006). Source profiles and
 registries stay intact for the independent verification stage.
 """
 
@@ -30,6 +31,8 @@ SOURCE_COLUMN_KEY = "_sharing_source_column"
 SUPPRESSED_KEY = "_sharing_suppressed_units"
 PERSON_DATE_KEY = "_sharing_person_date"
 LOOKUP_KEY = "_sharing_lookup"
+#: ADR-0006: the table's rows were counted as its people (a utility warning: it needs attention, never blocks)
+ROWS_AS_PEOPLE_CODE = "sharing_rows_as_people"
 
 
 def _other_person_attribute(p: ColumnProfile) -> bool:
@@ -489,8 +492,15 @@ def record_evidence(tp: TableProfile, raw: RawTable, settings: Any) -> None:
     All units count, including standard vocabulary and missing spellings. Blank
     person keys share one unknown holder through d35_keys, never one per row.
     This metadata is private and does not change source stats or public params.
+
+    ADR-0006: a table with no person key, where nothing suggests that a person
+    has several rows (``HolderKeys.rows_people``), counts each row as a person,
+    rows identical in every column once (``HolderKeys.duplicates``), and says so
+    (:data:`ROWS_AS_PEOPLE_CODE`). These counts stay in this table: nothing
+    pools them over the run.
     """
     keys = entity.d35_keys(raw, tp.columns, tp.entity, settings)
+    rows_people = not keys.people and keys.rows_people
     counts: dict[int, dict[str, int]] = {}
     classes: dict[int, dict[str, int]] = {}
     numbers: dict[int, dict[str, int]] = {}
@@ -542,11 +552,25 @@ def record_evidence(tp: TableProfile, raw: RawTable, settings: Any) -> None:
             for index in keys.keys:
                 got = text_detect.unit_holders(counted_values, p, index, extract)
                 held = {k: min(c, got.get(k, 0)) for k, c in held.items()}
+            if rows_people and keys.table is not None:
+                # one record exported several times is one person (as for D35's rows: HolderKeys.duplicates)
+                wanted = [k for k, c in held.items() if c >= 2]
+                found = text_detect.unit_rows(counted_values, p, wanted, extract)
+                for k, dup in keys.duplicates(p.index, counted_values, found).items():
+                    held[k] = min(held[k], dup)
             destination[p.index] = held
+    people = bool(keys.people or rows_people)
     one_per_person = bool(keys.people and keys.keys and all(len(np.unique(k)) == raw.n_rows for k in keys.keys))
-    tp.private.extra[EVIDENCE_KEY] = {"people": bool(keys.people), "counts": counts, "classes": classes, "numbers": numbers,
-                                      "date_buckets": date_buckets if keys.people else {},
+    tp.private.extra[EVIDENCE_KEY] = {"people": people, "rows_as_people": rows_people, "counts": counts,
+                                      "classes": classes, "numbers": numbers,
+                                      "date_buckets": date_buckets if people else {},
                                       "one_row_per_person": one_per_person}
+    if rows_people and (counts or classes or numbers or date_buckets):
+        tp.messages.append(Message(
+            "warning", ROWS_AS_PEOPLE_CODE,
+            "no column says which person each row belongs to and nothing suggests that a person has several rows, "
+            "so each row was counted as a different person (ADR-0006)",
+            fix="if someone can have several rows, name their ID column with --person-id"))
 
 
 def _clone_model(model: ColumnModel | None) -> ColumnModel | None:
@@ -1125,5 +1149,5 @@ def null_unprotectable_columns(tp: TableProfile, settings: Any) -> list[str]:
             return nulled
 
 
-__all__ = ["record_evidence", "protect_profile", "verify_values", "null_column", "null_unprotectable_columns",
+__all__ = ["record_evidence", "protect_profile", "ROWS_AS_PEOPLE_CODE", "verify_values", "null_column", "null_unprotectable_columns",
            "mark_auto_nulled", "column_scoped_findings", "AUTO_NULL_CODE", "AUTO_NULL_ALTERNATIVE_KEY", "AUTO_NULL_SOURCE", "EVIDENCE_KEY", "SOURCE_MODEL_KEY", "SUPPRESSED_KEY", "PERSON_DATE_KEY", "LOOKUP_KEY", "CHANGES_KEY", "change_records"]

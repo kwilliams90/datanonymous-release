@@ -188,8 +188,7 @@ problem("factor_overflow", "This column has too many different values to keep as
         "No action is needed unless the labels are required; then leave the column out with `--exclude`.")
 problem("lat_lon_independent", "Location values were made up independently, so shared points are not real places and latitude and longitude do not match.",
         "No action is needed unless locations matter; then leave the columns out with `--exclude`.")
-problem("column_excluded", "A column was left out with `--exclude`, so the shared file has fewer columns than the source.",
-        "No action is needed; remove `--exclude` for that column if you meant to share it.")
+change("column_excluded", "A column was left out by you with `--exclude`, so the shared file has fewer columns than the source.")
 problem("unused_column_flag", "An option you gave names a column that was not found: {text}.",
         "Check the spelling of the column name, or remove the option.")
 

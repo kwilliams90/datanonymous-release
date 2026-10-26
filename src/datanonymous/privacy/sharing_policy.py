@@ -23,9 +23,10 @@ POLICY_VERSION = "1"
 #: (ADR-0001); its real values are written nowhere and the leak scan looks for them.
 #: sharing_rows_as_people: a table with no person column and no sign of repeated people counted each row as a person
 #: (ADR-0006); rare values are still suppressed by those counts, and the report names the --person-id fix.
+#: column_excluded: --exclude leaves a column out, which releases less and never more (issue 26).
 UTILITY_WARNINGS = frozenset({"fidelity_drift", "extremes_not_emitted", "panel_detected",
                               "id_width_changed", "dtype_mismatch", "factor_overflow", "column_nulled_automatically",
-                              "sharing_rows_as_people"})
+                              "sharing_rows_as_people", "column_excluded"})
 
 
 #: options that sharing mode refuses (or refuses in the form a fix would suggest them): a sharing-mode message never

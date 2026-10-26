@@ -1029,6 +1029,7 @@ def build_report(run: RunResult, settings: Settings) -> dict[str, bytes]:
     data = run_json(run, min_cell)
     files["report.json"] = _json(data).encode("utf-8")
     files["REPORT.md"] = run_markdown(run, data).encode("utf-8")
+    files[PRIVATE_MARKER] = PRIVATE_MARKER_TEXT.encode("utf-8")
     manifest = {
         "tool": "datanonymous", "schema_version": SCHEMA_VERSION, "versions": versions(), "seed": run.seed,
         "seed_was_random": run.seed_was_random,
@@ -1090,6 +1091,19 @@ def nulled_columns(run: RunResult) -> list[tuple[str, str, bool, str, str]]:
 
 #: First line of REPORT.md and the console's private-folder wording: the report describes the source data
 PRIVATE_BANNER = "PRIVATE – DO NOT SHARE"
+
+#: The console's labels of the run's two destinations (ASCII; the start and the end of every run, issue 19)
+SHAREABLE_LABEL = "Shareable synthetic files"
+PRIVATE_LABEL = "PRIVATE report - do not share"
+
+#: The report folder's marker file: it says why the folder is private (never written to the output folder)
+PRIVATE_MARKER = "PRIVATE-DO-NOT-SHARE.txt"
+PRIVATE_MARKER_TEXT = (
+    "PRIVATE - DO NOT SHARE\n\n"
+    "This folder is the private report of a datanonymous run. It describes the real source data, so never share, "
+    "upload or send it to anyone.\n"
+    "Share only the output folder, which holds the synthetic files.\n"
+)
 
 
 def skip_kind(s: Any) -> str:
@@ -1202,7 +1216,8 @@ def run_markdown(run: RunResult, data: dict[str, Any]) -> str:
     done = written_files(run)
     lines = [f"# {PRIVATE_BANNER}", "",
              "This is the private report of a datanonymous run. It describes the source data: keep it out of "
-             "anything you share, and send only the synthetic files.", "",
+             f"anything you share, and send only the synthetic files. Read {PRIVATE_MARKER} in this folder for why.",
+             "",
              "## What was generated", "",
              f"{written_line(run)} to the output folder {code_span(_posix(run.out_dir))}." if done
              else f"{written_line(run)}."]
@@ -1385,6 +1400,9 @@ def console_summary(run: RunResult) -> list[str]:
         if run.data_mode == "sharing" and not_written:
             lines.append(f"{not_written} input file(s) were not written to the output folder; "
                          f"see {run.report_dir / FAILURES_CSV}")
+    if run.out_dir is not None and run.report_dir is not None:
+        lines.append(f"{SHAREABLE_LABEL}: {run.out_dir}")
+        lines.append(f"{PRIVATE_LABEL}: {run.report_dir}")
     return [ascii_text(_redact_text(run, x)) for x in lines]
 
 

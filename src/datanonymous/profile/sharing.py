@@ -925,11 +925,24 @@ def _key_or_related(tp: TableProfile, index: int) -> bool:
     return index in _related_columns(tp)
 
 
-def null_column(tp: TableProfile, index: int, reason: str, *, automatic: bool = True) -> ColumnProfile:
+def _catalogue_fix(code: str | None) -> str | None:
+    """The catalogue's fix for ``code`` as plain text (no code spans), or None when it has none that stands alone."""
+    from ..messages import lookup
+
+    entry = lookup(code) if code else None
+    if entry is None or not entry.fix or "{text}" in entry.fix:
+        return None
+    return entry.fix.replace("`", "")
+
+
+def null_column(tp: TableProfile, index: int, reason: str, *, automatic: bool = True,
+                alternative: str | None = None) -> ColumnProfile:
     """Turn column ``index`` of ``tp`` into a Nulled column, the way ``--null`` does: header and position kept,
     every cell written missing, and its real values recorded as dropped (``privacy.texts.DROPPED_KEY``) so no
     generator writes one and the leak scan looks for them. ``reason`` is the plain reason; ``automatic`` says
     sharing mode (not the operator) nulled it, which the column records and reports as a utility warning.
+    ``alternative`` is the fix that belongs to the reason (the catalogue's fix of the refusal); an ID-like column
+    gets the ID-specific one instead.
     Returns the new column profile (it replaces the old one in ``tp.columns``)."""
     from ..hints import DEFAULT_NA_TOKENS
     from ..privacy import texts as real_texts
@@ -948,7 +961,7 @@ def null_column(tp: TableProfile, index: int, reason: str, *, automatic: bool = 
     new.flags["nulled_automatically"] = automatic
     if automatic:
         # an ID-like column (D7 candidate) may be an ID the operator can declare instead (ADR-0001)
-        mark_auto_nulled(new, reason, _id_alternative(old.name) if old.params.get("id_candidate") else None)
+        mark_auto_nulled(new, reason, _id_alternative(old.name) if old.params.get("id_candidate") else alternative)
     tp.columns[index] = new
     if old.params.get("id_candidate") and not any(p.params.get("id_candidate") for p in tp.columns):
         # the table's ID-like candidates (D7) were all nulled: none of their real values is written any more
@@ -972,7 +985,10 @@ def mark_auto_nulled(p: ColumnProfile, reason: str, alternative: str | None = No
     p.flags["nulled_automatically"] = True
     if alternative:
         p.params[AUTO_NULL_ALTERNATIVE_KEY] = alternative
-    instead = (alternative + "; " if alternative else "") + f"--exclude {p.name} drops the column instead"
+    if alternative and "--exclude" in alternative:
+        instead = alternative.rstrip(". ")
+    else:
+        instead = (alternative + "; " if alternative else "") + f"--exclude {p.name} drops the column instead"
     p.messages.append(Message(
         "warning", AUTO_NULL_CODE,
         f"column {p.name!r} was nulled automatically (written with every cell empty) because {reason}",
@@ -1001,7 +1017,7 @@ def _post_generation_reason(name: str, codes: list[str]) -> tuple[str, str | Non
 
     entry = lookup(codes[0])
     found = f" ({entry.sentence.rstrip('.')})" if entry is not None and "{text}" not in entry.sentence else ""
-    return f"a privacy check of the generated file found a problem with it{found}", None
+    return f"a privacy check of the generated file found a problem with it{found}", _catalogue_fix(codes[0])
 
 
 def column_scoped_findings(fr: Any, finding_category: Any) -> dict[int, dict[int, tuple[str, str | None]]] | None:
@@ -1101,7 +1117,7 @@ def null_unprotectable_columns(tp: TableProfile, settings: Any) -> list[str]:
             i = refusal.index
             if not (0 <= i < len(tp.columns)) or tp.columns[i].role in ("null", "excluded") or _key_or_related(tp, i):
                 return nulled
-            null_column(tp, i, refusal.plain, automatic=True)
+            null_column(tp, i, refusal.plain, automatic=True, alternative=_catalogue_fix(refusal.code))
             nulled.append(tp.columns[i].name)
         except Exception:  # noqa: BLE001 - generation reports it for the file (D19)
             return nulled

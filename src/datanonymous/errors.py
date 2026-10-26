@@ -12,10 +12,15 @@ from __future__ import annotations
 class DatanonymousError(Exception):
     """Base class. ``fix`` is a short, user-facing remedy (usually a flag)."""
 
-    def __init__(self, message: str, fix: str | None = None) -> None:
+    def __init__(self, message: str, fix: str | None = None, *, code: str | None = None,
+                 column: str | None = None) -> None:
         super().__init__(message)
         self.message = message
         self.fix = fix
+        #: the message-catalogue code that explains this failure in plain language (``datanonymous.messages``),
+        #: and the column it is about; the generic ``fail`` entry covers an error without one
+        self.code = code
+        self.column = column
 
     def __str__(self) -> str:  # pragma: no cover - trivial
         return self.message

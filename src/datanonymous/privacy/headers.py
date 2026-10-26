@@ -3604,7 +3604,7 @@ def screen_run(run: Any, settings: Any, root: Path, registry: Any = None) -> lis
         tflags = [(t_i, f) for t_i, f in table_flags.get(f_i, []) if f.written]
         if path_flags or tflags:
             reason, fix = _reason(fr, path_flags, tflags, sharing=getattr(settings, "mode", "") == "sharing")
-            fr.fail(reason, fix)
+            fr.fail(reason, fix, "name_holds_personal_data")
             fr.withheld = True
             n_failed += 1
         if path_flags:

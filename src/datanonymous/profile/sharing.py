@@ -217,7 +217,8 @@ def _check_embedded_relationships(columns: list[ColumnProfile]) -> None:
                 key = kind, part.strip().casefold()
                 previous = seen.get(key)
                 if previous and (previous[0], previous[1]) != (p.index, raw) and (embedded or previous[2]):
-                    _refuse(p, "has a repeated embedded PII relationship whose source graph cannot be safely retained")
+                    _refuse(p, "has a repeated embedded PII relationship whose source graph cannot be safely retained",
+"sharing_repeated_embedded")
                 seen[key] = (p.index, raw, embedded or bool(previous and previous[2]))
 
 
@@ -322,9 +323,10 @@ def _clone_model(model: ColumnModel | None) -> ColumnModel | None:
     return replace(model, nonmissing_counts=dict(model.nonmissing_counts), missing_counts=dict(model.missing_counts), extra=extra)
 
 
-def _refuse(p: ColumnProfile, reason: str) -> None:
+def _refuse(p: ColumnProfile, reason: str, code: str) -> None:
     raise GenerationError(f"sharing mode: column {p.name!r} {reason}",
-                          fix=f"--null {p.name} or --exclude {p.name}; use --person-id COL when a column identifies the row's person")
+                          fix=f"--null {p.name} or --exclude {p.name}; use --person-id COL when a column identifies the row's person",
+                          code=code, column=p.name)
 
 
 def _rescale(counts: dict[Any, int], n: int) -> dict[Any, int]:
@@ -343,7 +345,8 @@ def _protect_model(p: ColumnProfile, model: ColumnModel, rare: set[str]) -> Colu
             continue
         nm[raw] += int(count)
     if not nm and not missing and model.n_nonmissing + model.n_missing:
-        _refuse(p, "has no category or missing value supported by enough distinct people in this table")
+        _refuse(p, "has no category or missing value supported by enough distinct people in this table",
+"sharing_no_support")
     total = model.n_nonmissing + model.n_missing
     # Suppressed units get zero rows. Reassign their mass within the same
     # missing/nonmissing group, or to the only remaining supported group.
@@ -437,7 +440,8 @@ def _check_native_storage(p: ColumnProfile) -> None:
         classes = {(kind, formats.get(kind) or "General") for kind, count in (native.get("types") or {}).items()
                    if count > 0}
     if len(classes) > 1:
-        _refuse(p, "has mixed Excel cell types or number formats without distinct-person support for their retained quotas")
+        _refuse(p, "has mixed Excel cell types or number formats without distinct-person support for their retained quotas",
+"sharing_mixed_cell_types")
 
 
 def _trim_params(p: ColumnProfile, rare: set[str]) -> None:
@@ -464,13 +468,15 @@ def _structural_contracts(tp: TableProfile, dates: set[int]) -> None:
     sensitive = {p.index for p in tp.columns if p.role == "id" or _invented(p)} | dates
     for fd in tp.structure.private.get("fds", ()):
         if not fd.get("overridden") and sensitive.intersection((fd["det"], fd["dep"])):
-            _refuse(tp.columns[fd["dep"]], "has a source person dependency that cannot preserve fictional relationships")
+            _refuse(tp.columns[fd["dep"]], "has a source person dependency that cannot preserve fictional relationships",
+"sharing_person_dependency")
     # A template's source grouping carries the original distinct/frequency
     # relationship even after its input labels become fictional.
     for template in tp.structure.private.get("templates", ()):
         if template.get("groups") or sensitive.intersection(
                 {template["target"]} | {part[1] for part in template.get("parts", ()) if part[0] == "f"}):
-            _refuse(tp.columns[template["target"]], "has a source template relationship that cannot be safely regenerated")
+            _refuse(tp.columns[template["target"]], "has a source template relationship that cannot be safely regenerated",
+"sharing_source_template")
 
 
 def verify_values(profile: ColumnProfile, values: Any) -> list[Message]:
@@ -545,19 +551,23 @@ def protect_profile(tp: TableProfile, settings: Any) -> TableProfile:
                 f"sharing mode: column {p.name!r} contains an intrinsic attribute of another person; "
                 "distinct-person support for that actor has not been established",
                 fix=f"--null {p.name} or --exclude {p.name}",
+                code="sharing_other_person_attribute", column=p.name,
             )
         source = tp.columns[p.index]
         p.model.extra[SOURCE_COLUMN_KEY] = source
         requested = {u for raw in (*source.model.nonmissing_counts, *source.model.missing_counts) for u in _units(source, raw)} | _native_units(source)
         held = (evidence.get("counts") or {}).get(p.index, {})
         if requested and not lookup and not evidence.get("people"):
-            _refuse(p, "cannot establish distinct-person support for its categories or missing values")
+            _refuse(p, "cannot establish distinct-person support for its categories or missing values",
+"sharing_no_people")
         rare = {u for u in requested if int(held.get(u, 0)) < k} if not lookup else set()
         if rare:
             if p.type in (ColumnType.NUMERIC_FORMATTED, ColumnType.NUMERIC_WITH_TOKENS, ColumnType.DECIMAL) and any(u.startswith("n:") for u in rare):
-                _refuse(p, "has a rare discrete numeric value that interpolation can restore")
+                _refuse(p, "has a rare discrete numeric value that interpolation can restore",
+"sharing_rare_numeric")
             if p.index in related:
-                _refuse(p, "has rare units in a structural key, dependency or rule that cannot be safely regenerated")
+                _refuse(p, "has rare units in a structural key, dependency or rule that cannot be safely regenerated",
+"sharing_rare_in_structure")
             p.model = _protect_model(source, p.model, rare)
             if p.index in private.entity_models:
                 private.entity_models[p.index] = _protect_model(source, private.entity_models[p.index], rare)
@@ -572,9 +582,11 @@ def protect_profile(tp: TableProfile, settings: Any) -> TableProfile:
             p.flags["sharing_rare_units_suppressed"] = True
         if not lookup and p.type in sharing_numeric.TYPES and p.model.n_nonmissing:
             if not evidence.get("people"):
-                _refuse(p, "cannot establish distinct-person support for its numeric measures")
+                _refuse(p, "cannot establish distinct-person support for its numeric measures",
+"sharing_no_people")
             if p.index in related:
-                _refuse(p, "has numeric extrema in a structural contract that cannot be safely regenerated")
+                _refuse(p, "has numeric extrema in a structural contract that cannot be safely regenerated",
+"sharing_numeric_structure")
             number_holders = (evidence.get("numbers") or {}).get(p.index, {})
             forbidden = frozenset(key for key in sharing_numeric.source_extremes(source)
                                   if int(number_holders.get("n:" + key, 0)) < k)
@@ -605,7 +617,8 @@ def protect_profile(tp: TableProfile, settings: Any) -> TableProfile:
             p.params[PERSON_DATE_KEY] = True
             p.params["_no_exact_extremes"] = True
             if p.index in value_contracts:
-                _refuse(p, "has a protected person date in a structural contract that cannot be safely regenerated")
+                _refuse(p, "has a protected person date in a structural contract that cannot be safely regenerated",
+"sharing_date_structure")
             from ..generate.sharing_dates import normalized_keys, source_extremes
 
             missing = list(source.model.missing_counts)
@@ -619,12 +632,14 @@ def protect_profile(tp: TableProfile, settings: Any) -> TableProfile:
                 changed.add(p.index)
         if not lookup and p.model.n_nonmissing and (_invented(p) or p.type in date_detect.DATE_TYPES):
             if not evidence.get("people"):
-                _refuse(p, "cannot establish distinct-person support for its retained date, text or PII classes")
+                _refuse(p, "cannot establish distinct-person support for its retained date, text or PII classes",
+"sharing_no_people")
             signatures = _generation_classes(source)
             held_classes = (evidence.get("classes") or {}).get(p.index, {})
             if any(int(held_classes.get(signature, 0)) < k for raw, signature in signatures.items()
                    if raw in p.model.nonmissing_counts):
-                _refuse(p, "has a date, text or PII format/frequency class supported by fewer than the required distinct people")
+                _refuse(p, "has a date, text or PII format/frequency class supported by fewer than the required distinct people",
+"sharing_rare_class")
     _structural_contracts(out, person_dates)
     # Source joint missingness can identify one pattern donor even when every
     # marginal is common. Only independent protected marginals survive.

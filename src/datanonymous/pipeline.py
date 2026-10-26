@@ -231,7 +231,7 @@ def _internal_failure(fr: FileResult, run: RunResult, exc: BaseException, stage:
     # Never print the exception's text anywhere (report, console, -v traceback): its message, arguments, notes and
     # chained exceptions may quote a real value, and a read error comes before any index could redact it (R7-04)
     fr.fail(f"internal error during {stage} ({diagnostics.error_place(exc)})",
-            "re-run with -v to see the traceback, and report it")
+            "re-run with -v to see the traceback, and report it", code="internal_error")
     run.debug.append(f"{fr.rel_path}: " + diagnostics.safe_traceback(exc))
 
 
@@ -271,7 +271,7 @@ def profile_file(f: DiscoveredFile, settings: Settings, run: RunResult,
         return None
     except DatanonymousError as e:
         fr.tables = []
-        fr.fail(e.message, e.fix)
+        fr.fail(e.message, e.fix, e.code, e.column)
     except Exception as e:  # noqa: BLE001 - per-file isolation (D19)
         fr.tables = []
         _internal_failure(fr, run, e, "reading/profiling")
@@ -318,11 +318,13 @@ def plan_key_refs(run: RunResult, files: dict[str, DiscoveredFile], settings: Se
                         for tp in fr.tables for p in tp.columns if p.params.get("_key_ref_list")})
         if stuck and not fr.failed:
             fr.fail(f"column(s) {', '.join(stuck)} hold the real IDs of an ID column but could not be treated as "
-                    "ID columns; the file is not written", "--id-col " + " --id-col ".join(stuck))
+                    "ID columns; the file is not written", "--id-col " + " --id-col ".join(stuck),
+                    code="unlinked_key_column")
         if lists and not fr.failed:
             fr.fail(f"column(s) {', '.join(lists)} hold lists of the real IDs of an ID column, which would be "
                     "written as they are; the file is not written",
-                    " ".join(f"--force-text {c}" for c in lists) + " (invented labels), or --null / --exclude")
+                    " ".join(f"--force-text {c}" for c in lists) + " (invented labels), or --null / --exclude",
+                    code="unlinked_key_column")
     return msgs
 
 
@@ -402,7 +404,7 @@ def plan_ids(files: list[FileResult], seed: int, settings: Settings | None = Non
         members = {m[0] for m in ns.members}
         for fr in files:
             if fr.rel_path in members and not fr.failed:
-                fr.fail(ns.error.message, ns.error.fix)
+                fr.fail(ns.error.message, ns.error.fix, ns.error.code, ns.error.column)
     return reg, namespaces
 
 
@@ -533,13 +535,13 @@ def generate_file(fr: FileResult, settings: Settings, run: RunResult, reg: IdReg
 
                 for column in st.columns:
                     for message in verify_values(st.profile.columns[column.index], column.values):
-                        fr.fail(message.text, message.fix)
+                        fr.fail(message.text, message.fix, message.code, message.column)
             for column in st.columns:
                 # Every generation/privacy repair has finished. Writers render
                 # copies and never mutate these final synthetic column arrays.
                 column.values.flags.writeable = False
             for m in leaks.scan_table(tp, st):
-                fr.fail(m.text + (f" (column {m.column})" if m.column else ""), m.fix)
+                fr.fail(m.text + (f" (column {m.column})" if m.column else ""), m.fix, m.code, m.column)
             synth.append(st)
         if fr.failed:
             return None
@@ -596,7 +598,7 @@ def generate_file(fr: FileResult, settings: Settings, run: RunResult, reg: IdReg
                     from .profile.sharing import verify_values
 
                     for message in verify_values(p, values):
-                        fr.fail(message.text, message.fix)
+                        fr.fail(message.text, message.fix, message.code, message.column)
                     if fr.failed:
                         dest.unlink(missing_ok=True)
                         return None
@@ -667,7 +669,7 @@ def generate_file(fr: FileResult, settings: Settings, run: RunResult, reg: IdReg
         tmp.unlink(missing_ok=True)
         if fr.written:  # D19: a file that FAILs after its output was moved into place is not written either
             dest.unlink(missing_ok=True)
-        fr.fail(e.message, e.fix)
+        fr.fail(e.message, e.fix, e.code, e.column)
     except Exception as e:  # noqa: BLE001 - per-file isolation (D19)
         tmp.unlink(missing_ok=True)
         if fr.written:
@@ -708,8 +710,9 @@ def _execute(settings: Settings, input_path: Path, out_dir: Path | None = None, 
         if fr is not None:
             if _left_out and fr.rel_path in _left_out and not fr.failed:
                 earlier = _left_out[fr.rel_path]
-                fr.fail(earlier.reasons[0] if earlier.reasons else "not written in an earlier attempt",
-                        earlier.fixes[0] if earlier.fixes else None)
+                reason = earlier.reasons[0] if earlier.reasons else "not written in an earlier attempt"
+                fr.fail(reason, earlier.fixes[0] if earlier.fixes else None,
+                        next((m.code for m in earlier.messages if m.level == "error" and m.text == reason), None))
             run.files.append(fr)
     if disc.files and not run.files:
         run.messages.append(Message("warning", "no_tabular_files", "no supported tabular files found in the input"))
@@ -762,7 +765,7 @@ def _execute(settings: Settings, input_path: Path, out_dir: Path | None = None, 
                     for fr in run.files:
                         error = next((e for (path, _), e in refusal.refused.items() if path == fr.rel_path), None)
                         if error is not None:
-                            fr.fail(error.message, error.fix)
+                            fr.fail(error.message, error.fix, error.code, error.column)
                     continue
                 error = refusal
             except DatanonymousError as caught:  # a refusal no table answers for: nothing is planned
@@ -782,7 +785,7 @@ def _execute(settings: Settings, input_path: Path, out_dir: Path | None = None, 
                 break
             for fr in run.files:
                 if not fr.failed:
-                    fr.fail(error.message, error.fix)
+                    fr.fail(error.message, error.fix, error.code, error.column)
             break
     planned = {fr.rel_path for fr in run.files if not fr.failed}
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -868,7 +871,7 @@ def execute(settings: Settings, input_path: Path, out_dir: Path | None = None, r
         run.messages.append(Message("error", "sharing_promotion", "the output could not be moved into the output folder, so nothing was written to it",
                                     fix="choose a new or empty output folder on the same drive as the report folder"))
         for fr in run.files:
-            fr.fail("not written: the output could not be moved into the output folder")
+            fr.fail("not written: the output could not be moved into the output folder", code="sharing_promotion")
         run.docs = {}
     run.out_dir = destination
     report_mod.write_report_files(local_report, report_mod.build_report(run, settings))

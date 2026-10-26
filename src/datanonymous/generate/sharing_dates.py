@@ -76,7 +76,8 @@ def source_extremes(profile: ColumnProfile, model: ColumnModel | None = None) ->
 
 def _refuse(profile: ColumnProfile) -> None:
     raise GenerationError(f"sharing mode: column {profile.name!r} has no month-preserving date cover that hides its original extrema in the required format/calendar",
-                          fix=f"--null {profile.name} or --exclude {profile.name}; use a finer date precision or remove the rigid calendar constraint")
+                          fix=f"--null {profile.name} or --exclude {profile.name}; use a finer date precision or remove the rigid calendar constraint",
+                          code="sharing_date_no_cover", column=profile.name)
 
 
 def _month_days(month: int) -> np.ndarray:
@@ -147,7 +148,8 @@ def validate_bucket_support(profile: ColumnProfile) -> None:
     if any(int(held.get(key, 0)) < minimum for key in visible):
         raise GenerationError(
             f"sharing mode: column {profile.name!r} has an excluded endpoint calendar bucket supported by fewer than the required distinct people",
-            fix=f"--null {profile.name} or --exclude {profile.name}; use --person-id COL when a column identifies the row's person")
+            fix=f"--null {profile.name} or --exclude {profile.name}; use --person-id COL when a column identifies the row's person",
+            code="sharing_rare_class", column=profile.name)
 
 
 def _covered_pool(profile: ColumnProfile, days: np.ndarray, forbidden_days: set[int], *, datetime: bool = False) -> np.ndarray:
@@ -237,12 +239,14 @@ def _set_days(out: np.ndarray, rows: np.ndarray, local_days: np.ndarray, local_s
     local_big = [int(d) * per_day + int(t) for d, t in zip(local_days, local_sod)]
     info = np.iinfo(np.int64)
     if any(v < info.min or v > info.max for v in local_big):
-        raise GenerationError("sharing mode: a month-preserving date exceeds the source timestamp representation")
+        raise GenerationError("sharing mode: a month-preserving date exceeds the source timestamp representation",
+                              code="sharing_date_out_of_range")
     local = np.array(local_big, dtype=np.int64)
     offsets = G._offset_ticks(out["tz"][rows], local, tpu)
     instant_big = [int(v) - int(offset) for v, offset in zip(local, offsets)]
     if any(v < info.min or v > info.max for v in instant_big):
-        raise GenerationError("sharing mode: a month-preserving instant exceeds the source timestamp representation")
+        raise GenerationError("sharing mode: a month-preserving instant exceeds the source timestamp representation",
+                              code="sharing_date_out_of_range")
     inst = np.array(instant_big, dtype=np.int64)
     out["day"][rows], out["us"][rows] = np.divmod(inst, per_day)
 

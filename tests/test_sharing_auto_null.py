@@ -181,7 +181,9 @@ def test_the_report_tells_operator_nulls_from_automatic_ones(tmp_path):
     assert all(row["Other_Score"] == "" and row["Parental_Education_Level"] == ""
                for row in read_records(out / "roster.csv"))
     md = (report / "REPORT.md").read_text(encoding="utf-8")
-    section = md.split("## Nulled columns", 1)[1].split("\n## ", 1)[0]
+    attention = md.split("\n## What needs attention\n", 1)[1].split("\n## ", 1)[0]
+    assert "Parental_Education_Level" in attention and "Other_Score" not in attention  # only the automatic one
+    section = md.split("### Nulled columns", 1)[1].split("\n##", 1)[0]  # the Appendix lists both kinds
     by_column = {line.split("`")[3]: line for line in section.splitlines() if line.startswith("- ")}
     assert "by you" in by_column["Other_Score"] and "--null" in by_column["Other_Score"]
     auto = by_column["Parental_Education_Level"]

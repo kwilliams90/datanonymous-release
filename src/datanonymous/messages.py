@@ -79,6 +79,14 @@ problem("sharing_promotion", "The finished files could not be moved into the out
 problem("no_tabular_files", "No table files (CSV, Excel and the like) were found in the input folder.",
         "Point the run at a folder that holds table files.")
 
+# --------------------------------------------------------------------------- input files that were skipped
+problem("skipped_unsupported_format", "This file looks like a table but is in a format that cannot be read, so it was skipped.",
+        "Save or export it as .csv or .xlsx, then run again.")
+problem("skipped_not_a_table", "This file has a table file type, but its content is not a table, so it was skipped.",
+        "Check that it is the file you meant; if it is not data, leave it out with `--exclude-path`.")
+problem("skipped_folder_loop", "A linked folder leads back to a folder above it, so it was not followed.",
+        "Remove the link or point it at a different folder, then run again.")
+
 # --------------------------------------------------------------------------- sharing: columns that cannot be protected
 problem("sharing_unprotectable", "This column cannot be protected well enough to share.",
         "Leave it out with `--exclude`, or write it as an empty column with `--null`.")

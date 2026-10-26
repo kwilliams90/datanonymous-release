@@ -342,7 +342,8 @@ def test_report_sections_follow_the_spec_order(tmp_path: Path) -> None:
     res, out, rep = _run(tmp_path, src)
     assert res.exit_code == 3
     md = (rep / "REPORT.md").read_text(encoding="utf-8")
-    order = [md.index(h) for h in ("## Verdict", "## Files", "## Skipped (not copied)", "## Failures")]
+    order = [md.index(h) for h in ("## What was generated", "## What needs attention", "## Appendix", "### Verdict", "### Files",
+                                  "### Skipped inputs (not copied)")]
     assert order == sorted(order)
     assert "(files/a%23b/staff%20%281%29.csv.md)" in md  # '#', spaces and parentheses are encoded
 

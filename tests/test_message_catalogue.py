@@ -155,7 +155,7 @@ def test_sharing_reports_never_suggest_an_option_sharing_refuses(tmp_path):
     for path in shown:
         text = path.read_text(encoding="utf-8")
         if path.name == "REPORT.md":  # the criteria table above the findings describes checks; it suggests nothing
-            text = text[text.index("## Failures"):]
+            text = text[text.index("## What needs attention"):text.index("## Appendix")]
         assert not names_refused_option(text), (path.name, [f for f in REFUSED_SUGGESTIONS if f in text])
 
 

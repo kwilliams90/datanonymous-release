@@ -636,6 +636,12 @@ class SkippedFile:
     reason: str
     #: left out on purpose by --include / --exclude-path, not an input the run could not handle
     deselected: bool = False
+    #: a file that is not a table format at all (a PDF, an image, a Word document): summarised, not actionable
+    routine: bool = False
+    #: what the routine summary counts it by (``.pdf``); empty for an actionable or deselected input
+    ext: str = ""
+    #: message-catalogue code explaining an actionable input in plain language
+    code: str = ""
 
 
 @dataclass

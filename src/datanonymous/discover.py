@@ -176,7 +176,8 @@ class _Walk:
                 continue
             if linked and any(paths.contains(real, a) for a in chain):
                 skipped.append(SkippedFile(Path(p).relative_to(self.root).as_posix() + "/",
-                                           "linked folder leads back to a folder above it (a loop); not followed"))
+                                           "linked folder leads back to a folder above it (a loop); not followed",
+                                           code="skipped_folder_loop"))
                 continue
             if self.avoid:
                 self.guard(Path(p), real, linked)
@@ -228,12 +229,15 @@ _APPLEDOUBLE_RE = re.compile(r"^\._.+$")
 def classify(path: Path, rel: str) -> tuple[DiscoveredFile | None, SkippedFile | None]:
     name = PurePosixPath(rel).name
     if _LOCK_FILE_RE.match(name):
-        return None, SkippedFile(rel, "an Office owner or lock file of an open document (temporary, not a table)")
+        return None, SkippedFile(rel, "an Office owner or lock file of an open document (temporary, not a table)",
+                                  routine=True, ext="lock file")
     if _APPLEDOUBLE_RE.match(name):
-        return None, SkippedFile(rel, "a macOS AppleDouble file (resource fork and Finder data, not a table)")
+        return None, SkippedFile(rel, "a macOS AppleDouble file (resource fork and Finder data, not a table)",
+                                  routine=True, ext="AppleDouble file")
     suffixes = [s.lower() for s in PurePosixPath(name).suffixes]
     if not suffixes:
-        return None, SkippedFile(rel, "not a supported tabular file type (no extension)")
+        return None, SkippedFile(rel, "not a supported tabular file type (no extension)", routine=True,
+                                  ext="without extension")
     ext = suffixes[-1]
     compression = None
     if ext in registry.COMPRESSION_SUFFIXES and len(suffixes) >= 2:
@@ -242,14 +246,19 @@ def classify(path: Path, rel: str) -> tuple[DiscoveredFile | None, SkippedFile |
         if fmt in compress.COMPRESSIBLE_FORMATS:
             compression = registry.COMPRESSION_SUFFIXES[ext]
             return DiscoveredFile(path=path, rel_path=rel, format=fmt, out_rel_path=rel, compression=compression), None
-        return None, SkippedFile(rel, f"compressed {inner or 'file'} is not a supported tabular file")
+        reason = f"compressed {inner or 'file'} is not a supported tabular file"
+        if inner in registry.EXTENSION_FORMATS or inner in registry.UNSUPPORTED_ADVICE:  # looks like a table
+            return None, SkippedFile(rel, reason, code="skipped_unsupported_format")
+        return None, SkippedFile(rel, reason, routine=True, ext=inner + ext)
     if ext in registry.UNSUPPORTED_ADVICE:
-        return None, SkippedFile(rel, "unsupported tabular format: " + registry.UNSUPPORTED_ADVICE[ext])
+        return None, SkippedFile(rel, "unsupported tabular format: " + registry.UNSUPPORTED_ADVICE[ext],
+                                  code="skipped_unsupported_format")
     fmt = registry.EXTENSION_FORMATS.get(ext)
     if fmt is None:
         if not registry.known_extension(ext):  # 'Ana.Garcia': the suffix is part of the name (D34)
-            return None, SkippedFile(rel, "not a supported tabular file type (no known extension)")
-        return None, SkippedFile(rel, f"not a supported tabular file type ({ext})")
+            return None, SkippedFile(rel, "not a supported tabular file type (no known extension)", routine=True,
+                                      ext="unknown extension")
+        return None, SkippedFile(rel, f"not a supported tabular file type ({ext})", routine=True, ext=ext)
     out_rel = rel
     if ext in registry.OUTPUT_SUFFIX:
         out_rel = str(PurePosixPath(rel).with_suffix(registry.OUTPUT_SUFFIX[ext]))

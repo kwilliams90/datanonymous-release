@@ -74,13 +74,13 @@ def test_code_spans_survive_backticks_and_pipes() -> None:
 def test_report_starts_with_a_machine_checkable_verdict(example_run) -> None:
     md = (example_run.rep / "REPORT.md").read_text(encoding="utf-8")
     lines = md.splitlines()
-    assert lines[0] == "# datanonymous run report" and lines[2] == "## Verdict"
+    assert lines[0] == "# PRIVATE – DO NOT SHARE" and "## Appendix" in lines and "### Verdict" in lines
     m = re.search(r"^Overall verdict: (PASS|WARN|FAIL)$", md, re.M)
     data = json.loads((example_run.rep / "report.json").read_text(encoding="utf-8"))
     assert m and m.group(1) == data["verdict"]["overall"] == "WARN"
-    assert md.index("## Verdict") < md.index("## Files") < md.index("## Warnings")
+    assert md.index("### Verdict") < md.index("### Files") < md.index("### Warnings")
     for key in CRITERIA_KEYS + ["run_errors", "run_warnings"]:
-        assert f"`{key}`" in md.split("## Run")[0]
+        assert f"`{key}`" in md.split("### Run")[0]
     assert "### Per-file checks" in md
     assert "Self-check coverage" in md and "line ending" in md
 
@@ -167,7 +167,7 @@ def test_failures_have_exact_fixes_and_na_checks(tmp_path: Path) -> None:
     assert res.exit_code == 3
     md = (tmp_path / "r" / "REPORT.md").read_text(encoding="utf-8")
     assert "Overall verdict: FAIL" in md
-    fail_section = md.split("## Failures")[1].split("##")[0]
+    fail_section = md.split("## What needs attention")[1].split("## Appendix")[0]
     assert "`students_data.csv`: not written." in fail_section and "- Fix: " in fail_section
     assert "`--force-type`" in fail_section or "`--force-factor" in fail_section
     data = json.loads((tmp_path / "r" / "report.json").read_text(encoding="utf-8"))
@@ -184,9 +184,9 @@ def test_skipped_files_listed_with_reasons(tmp_path: Path, example_copy: Path) -
     res = run_cli(example_copy, "--out-dir", tmp_path / "o", "--report-dir", tmp_path / "r", "--seed", "1")
     assert res.exit_code == 0
     md = (tmp_path / "r" / "REPORT.md").read_text(encoding="utf-8")
-    skipped = md.split("## Skipped (not copied)")[1].split("##")[0]
-    assert "`notes.pdf`: not a supported tabular file type (.pdf)" in skipped
-    assert "`data.sav`: unsupported tabular format: SPSS file" in skipped
+    skipped = md.split("### Skipped inputs (not copied)")[1].split("##")[0]
+    assert "`notes.pdf` (routine): not a supported tabular file type (.pdf)" in skipped
+    assert "`data.sav` (actionable): unsupported tabular format: SPSS file" in skipped
 
 
 def test_excluded_column_makes_the_header_check_warn(tmp_path: Path) -> None:

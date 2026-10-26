@@ -267,7 +267,7 @@ def profile_file(f: DiscoveredFile, settings: Settings, run: RunResult,
     except UsageError:
         raise
     except NotTabular as e:
-        run.skipped.append(SkippedFile(f.rel_path, e.message))
+        run.skipped.append(SkippedFile(f.rel_path, e.message, code="skipped_not_a_table"))
         return None
     except DatanonymousError as e:
         fr.tables = []

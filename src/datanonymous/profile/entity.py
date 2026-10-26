@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Iterable
 
 import numpy as np
@@ -409,7 +409,12 @@ class HolderKeys:
     their keys may still prove people over the run (:func:`corroborated_tables`); ``sids``: the headers of the bare
     ``SID`` columns the counts of a table with no person key rest on (H-1: such counts may be of the students
     themselves, so over the run they rank as a claim, the fewest wins, never pooled with records and rows;
-    ``detect.text.people_level``).
+    ``detect.text.people_level``); ``rows_people`` (ADR-0006): the table has no person key and nothing suggests that
+    a person appears on several rows (no column of repeated wide keys, ``detect.ids.REPEATED_KEYS_KEY``; no name or
+    e-mail column of the row's own person that repeats a value), so sharing mode counts each row as a different
+    person IN THIS TABLE ONLY (``profile.sharing.record_evidence``; rows identical in every column still count once,
+    :meth:`duplicates`). It never makes :attr:`people` true: over the run such counts stay counts of rows
+    (``detect.text.people_level``), below every count of people.
     """
 
     keys: list[np.ndarray]
@@ -421,8 +426,10 @@ class HolderKeys:
     proven: bool = False
     claimed: tuple[int, ...] = ()
     sids: tuple[str, ...] = ()
+    rows_people: bool = False
     _columns: dict[int, np.ndarray] | None = None
     _rows: np.ndarray | None = None
+    _rest: dict[int, np.ndarray] = field(default_factory=dict)
 
     @property
     def columns(self) -> dict[int, np.ndarray]:
@@ -474,7 +481,9 @@ class HolderKeys:
         n_groups = int(own_codes.max()) + 1 if len(own_codes) else 0
         sizes = np.bincount(own_codes, minlength=n_groups).astype(float)
         pairs = sizes * (sizes - 1)  # ordered pairs of rows sharing a value of ``own``
-        rest = self._combined(own)
+        if own not in self._rest:  # one column is weighed for several kinds of unit (profile.sharing.record_evidence)
+            self._rest[own] = self._combined(own)
+        rest = self._rest[own]
         width = int(rest.max()) + 1 if len(rest) else 1
         joint, counts = np.unique(own_codes * width + rest, return_counts=True)
         alike = np.zeros(n_groups, dtype=float)  # ... that are identical in every other column
@@ -672,6 +681,9 @@ def d35_keys(table: RawTable, profiles: list[ColumnProfile], ent: EntityProfile,
     blank cell of a key of the row's own person takes only another such key, never a record number
     (:func:`_with_fallback`). With no person key, rows identical in every other column count once when chance alone
     would hardly make them identical (:meth:`HolderKeys.duplicates`: one record exported several times is one holder).
+    Such a table's rows count as its people for sharing mode (``HolderKeys.rows_people``, ADR-0006) unless a column
+    of repeated wide keys or a repeated name or e-mail address of the row's own person suggests that a person has
+    several rows; that never makes them people over the run.
     """
     id_cols = [i for i in ent.id_columns if profiles[i].role == "id"]
     key_cols = id_cols + [p.index for p in profiles if p.index not in id_cols and shadow_id(p, settings)]
@@ -727,8 +739,11 @@ def d35_keys(table: RawTable, profiles: list[ColumnProfile], ent: EntityProfile,
              else "records or rows (no ID or student-name column of the row's own person)" if keys
              else "rows (the table has no ID column)")
     own_rows = any(_distinct_per_row(codes[j]) for j in own)
+    # ADR-0006: a sign that a person has several rows (repeated wide ID-like keys, a repeated name or e-mail address
+    # of the row's own person); without one, sharing mode counts each row as a person within this table
+    repeats = any(p.params.get(REPEATED_KEYS_KEY) for p in profiles) or any(_repeats(codes[j]) for j in own)
     return HolderKeys(keys, False, basis, table=table, skip=frozenset(key_cols), own_rows=own_rows,
-                      claimed=tuple(claimed), sids=sids)
+                      claimed=tuple(claimed), sids=sids, rows_people=not repeats)
 
 
 #: Share of an ID's distinct keys (and of a name column's distinct names) that must pair with exactly one value of
@@ -803,6 +818,12 @@ def corroborated_tables(tables: Iterable[Any]) -> list[Any]:
 
 #: Share of the filled rows that must hold distinct values (:func:`_distinct_per_row`).
 DISTINCT_ROW_SHARE = 0.9
+
+
+def _repeats(codes: np.ndarray) -> bool:
+    """ADR-0006: a key column (codes, -1 blank) holds one filled value on more than one row."""
+    filled = codes[codes >= 0]
+    return len(np.unique(filled)) < len(filled)
 
 
 def _distinct_per_row(codes: np.ndarray) -> bool:

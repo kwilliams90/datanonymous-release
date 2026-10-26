@@ -21,8 +21,11 @@ POLICY_VERSION = "1"
 #: column is written as generated text and no real label is kept; the leak scan still checks it.
 #: column_nulled_automatically: a non-key column sharing mode could not protect is written with every cell empty
 #: (ADR-0001); its real values are written nowhere and the leak scan looks for them.
+#: sharing_rows_as_people: a table with no person column and no sign of repeated people counted each row as a person
+#: (ADR-0006); rare values are still suppressed by those counts, and the report names the --person-id fix.
 UTILITY_WARNINGS = frozenset({"fidelity_drift", "extremes_not_emitted", "panel_detected",
-                              "id_width_changed", "dtype_mismatch", "factor_overflow", "column_nulled_automatically"})
+                              "id_width_changed", "dtype_mismatch", "factor_overflow", "column_nulled_automatically",
+                              "sharing_rows_as_people"})
 
 
 #: options that sharing mode refuses (or refuses in the form a fix would suggest them): a sharing-mode message never

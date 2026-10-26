@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 from datanonymous.config import Settings
+from datanonymous.detect.ids import REPEATED_KEYS_KEY
 from datanonymous.errors import GenerationError
 from datanonymous.model import ColumnModel, ColumnProfile, ColumnType as T, EntityProfile, RawColumn, RawTable, TableProfile
 from datanonymous.profile import sharing
@@ -61,8 +62,15 @@ def test_other_table_and_lookup_counts_do_not_support_rare_fact_membership():
     assert sharing.protect_profile(lookup, settings).columns[0].model.nonmissing_counts == lookup.columns[0].model.nonmissing_counts
 
 
-def test_no_id_is_not_assumed_to_mean_one_person_per_row():
-    source, settings = table(["General"] * 40)
+def test_no_id_counts_each_row_as_a_person_only_without_a_sign_of_repeats():
+    # ADR-0006: with no person column and no sign of repeats, rows count as people within the table
+    source, settings = table(["General"] * 40 + ["IEP"] * 3)
+    assert source.private.extra[sharing.EVIDENCE_KEY]["rows_as_people"]
+    assert any(m.code == sharing.ROWS_AS_PEOPLE_CODE for m in source.messages)
+    assert sharing.protect_profile(source, settings).columns[0].model.nonmissing_counts == {"General": 43}
+    # a column of repeated wide ID-like keys suggests repeated people: no counts of people, as before
+    source, settings = table(["General"] * 40, params={REPEATED_KEYS_KEY: 9})
+    assert not source.private.extra[sharing.EVIDENCE_KEY]["rows_as_people"]
     with pytest.raises(GenerationError, match="distinct-person"):
         sharing.protect_profile(source, settings)
 

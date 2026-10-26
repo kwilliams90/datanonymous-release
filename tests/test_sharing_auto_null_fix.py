@@ -60,7 +60,9 @@ def _appendix(md: str) -> dict[str, str]:
 
 def test_a_table_without_a_person_column_suggests_person_id_not_id_col(tmp_path):
     original = tmp_path / "original"
-    _write(original / "survey.csv", [{"Group": ("North", "South", "East")[i % 3],
+    # ADR-0006: a repeated name is a sign that a person has several rows, so the rows cannot count as people
+    _write(original / "survey.csv", [{"Name": f"{('Alvo', 'Brisen', 'Corra')[i % 3]} {('Kettle', 'Lorrin')[i // 30]}",
+                                      "Group": ("North", "South", "East")[i % 3],
                                       "Parent_Education": EDUCATION[i // 20],
                                       "Score": f"{(5100 + i * 73) / 100:.2f}",
                                       "Other_Score": f"{(4000 + (i * 571) % 3999) / 100:.2f}"} for i in range(N)])

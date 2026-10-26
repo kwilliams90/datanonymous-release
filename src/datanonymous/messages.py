@@ -94,6 +94,8 @@ problem("sharing_no_support", "Too few different people share this column's valu
         "Leave the column out with `--exclude`, or write it as an empty column with `--null`.")
 problem("sharing_no_people", "This table has no person column, so sharing mode cannot tell how many people hold each value.",
         "Name the column that identifies each row's person with `--person-id`, or leave the column out with `--exclude`.")
+problem("sharing_rows_as_people", "Each row was treated as a different person.",
+        "If someone can have several rows, name their ID column with `--person-id`.")
 problem("sharing_rare_in_structure", "This column holds rare values that are tied to a key, rule or dependency between columns.",
         "Leave the column out with `--exclude`, or write it as an empty column with `--null`.")
 problem("sharing_rare_numeric", "This number column has rare values that could be recovered from the shared copy.",
@@ -140,7 +142,7 @@ problem("real_id_values", "Some values in this column are real person IDs from y
 # --------------------------------------------------------------------------- IDs, keys and links between columns
 problem("id_candidates", "Some columns look like IDs, but sharing mode is not treating them as IDs.",
         "Declare each one with `--person-id` (a person's own ID) or `--id-col` (any other ID), or leave it out with `--exclude`.")
-problem("no_id_column", "No column was recognised as an ID, so every row is treated as its own person.",
+problem("no_id_column", "No column was recognised as an ID, but some columns look like IDs.",
         "Name the column that identifies each person with `--person-id`.")
 problem("id_columns_unrelated", "Two ID columns are not linked to each other, so their pairing in the shared copy is only kept row by row.",
         "Check that both columns are the IDs you mean, and declare any that are not with `--id-col`.")

@@ -216,7 +216,8 @@ def excluded_dtype_messages(fr: FileResult) -> list[Message]:
         for name, a, b in _dtype_pairs(fr, t_i) or []:
             if a != b:
                 out.append(Message("warning", "dtype_mismatch",
-                                   f"column {name!r}: pandas reads {a} from the source but {b} from the output"))
+                                   f"column {name!r}: pandas reads {a} from the source but {b} from the output",
+                                   column=name))
     return out
 
 
@@ -1188,8 +1189,9 @@ def attention_items(run: RunResult, data: dict[str, Any], markdown: bool = True)
                    else "nulled automatically (written with every cell empty)")
             items.append((f"{where_of(file)} {code_span(column) if markdown else column}", why,
                           [esc(alternative) if alternative else AUTO_NULL_FIX_MD if markdown else AUTO_NULL_FIX_PLAIN]))
+    nulled_keys = _nulled_keys(run)
     for w in data["warnings"]:
-        if not _shown_warning(w, sharing):
+        if not _shown_warning(w, sharing) or _nulled_dtype_warning(w, nulled_keys):
             continue
         fr = by_source.get(w.get("file")) if w.get("file") else None
         cands = _candidates(fr) if fr is not None else run_cands
@@ -1221,6 +1223,17 @@ def _shown_warning(w: dict[str, Any], sharing: bool) -> bool:
     Appendix's warnings."""
     entry = catalogue.lookup(w["code"])
     return sharing and entry is not None and entry.kind == catalogue.PROBLEM
+
+
+def _nulled_keys(run: RunResult) -> set[tuple[str, str]]:
+    """(file, column) of every Nulled column of the files written."""
+    return {(file, column) for file, column, *_ in nulled_columns(run)}
+
+
+def _nulled_dtype_warning(w: dict[str, Any], nulled: set[tuple[str, str]]) -> bool:
+    """True for a dtype_mismatch on a Nulled column. Such a column reads as another dtype by design (all cells empty),
+    so the change stays in the Appendix and is not listed under "What needs attention"."""
+    return w["code"] == "dtype_mismatch" and (w.get("file"), w.get("column")) in nulled
 
 
 def run_markdown(run: RunResult, data: dict[str, Any]) -> str:
@@ -1323,7 +1336,8 @@ def run_markdown(run: RunResult, data: dict[str, Any]) -> str:
             lines.append(f"- ... {len(data['skipped']) - 500} more in report.json")
         lines.append("")
     by_source = {fr.rel_path: fr for fr in run.files}
-    other_warnings = [w for w in data["warnings"] if not _shown_warning(w, sharing)]
+    # every dtype difference is recorded here, also one that is under "What needs attention"
+    other_warnings = [w for w in data["warnings"] if not _shown_warning(w, sharing) or w["code"] == "dtype_mismatch"]
     if other_warnings:
         lines += ["### Warnings", ""]
         for w in other_warnings:

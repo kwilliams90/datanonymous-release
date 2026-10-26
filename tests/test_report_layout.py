@@ -7,6 +7,7 @@ report.json, sharing-failures.csv and the output folder.
 from __future__ import annotations
 
 import csv
+import dataclasses
 import json
 import re
 from pathlib import Path
@@ -14,6 +15,7 @@ from pathlib import Path
 from click.testing import CliRunner
 
 from datanonymous.cli import main
+from datanonymous.io import registry
 
 from release_corpus import student_id
 
@@ -182,3 +184,72 @@ def test_report_json_manifest_and_failures_csv_keep_their_content(tmp_path):
         rows = list(csv.DictReader(stream))
     assert {r["input_path"] for r in rows} >= {"broken.xlsx", "a.pdf"}
     assert list(rows[0]) == ["input_path", "outcome", "reason"]
+
+
+def _drift_roster(folder: Path) -> None:
+    """Count (integers) is nulled by the test; Score (two-decimal numbers) is kept and may drift."""
+    folder.mkdir(parents=True, exist_ok=True)
+    with (folder / "roster.csv").open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.writer(stream, lineterminator="\n")
+        writer.writerow(["Student_ID", "Count", "Score", "Other_Score"])
+        for i in range(60):
+            writer.writerow([student_id(i), 10 + i * 3, f"{(5100 + i * 73) / 100:.2f}",
+                             f"{(4000 + (i * 571) % 3999) / 100:.2f}"])
+
+
+def _score_reads_as_text_in_the_output(monkeypatch, original: Path) -> None:
+    """Make pandas read the kept Score column of the output (position 2) as text: a real dtype change nobody planned.
+    The source is read as before."""
+    handler = registry.output_handler("csv")
+    real = handler.inferred_dtypes
+
+    def drifted(path, layout, table):
+        dtypes = real(path, layout, table)
+        if dtypes is None or Path(path).resolve().parent == original.resolve():
+            return dtypes
+        dtypes = list(dtypes)
+        dtypes[2] = "object"
+        return dtypes
+
+    monkeypatch.setitem(registry.FORMATS, "csv", dataclasses.replace(handler, inferred_dtypes=drifted))
+
+
+def _attention_lines(md: str) -> list[str]:
+    return [line for line in _section(md, "What needs attention").splitlines() if line.startswith("- ")]
+
+
+def test_a_dtype_change_on_a_nulled_column_is_not_under_attention(tmp_path):
+    original = tmp_path / "original"
+    _drift_roster(original)
+    result, out, report = _run(original, tmp_path, "--null", "Count")
+    data = json.loads((report / "report.json").read_text(encoding="utf-8"))
+    assert any(w["code"] == "dtype_mismatch" and w.get("column") == "Count" for w in data["warnings"])  # the change is real
+    md = (report / "REPORT.md").read_text(encoding="utf-8")
+    assert "dtype_mismatch" not in _section(md, "What needs attention")
+    assert "Nothing needs attention." in _section(md, "What needs attention")
+    assert "dtype_mismatch" not in result.output.split("What needs attention", 1)[1]
+
+
+def test_a_dtype_change_on_a_kept_column_is_under_attention_once_and_names_the_column(tmp_path, monkeypatch):
+    original = tmp_path / "original"
+    _drift_roster(original)
+    _score_reads_as_text_in_the_output(monkeypatch, original)
+    result, out, report = _run(original, tmp_path, "--null", "Count")
+    md = (report / "REPORT.md").read_text(encoding="utf-8")
+    lines = _attention_lines(md)
+    drift = [line for line in lines if "dtype_mismatch" in line]
+    assert len(drift) == 1, lines
+    assert "[Score]" in drift[0]
+    assert "[Score]" in result.output.split("What needs attention", 1)[1]
+
+
+def test_the_appendix_still_records_every_dtype_difference(tmp_path, monkeypatch):
+    original = tmp_path / "original"
+    _drift_roster(original)
+    _score_reads_as_text_in_the_output(monkeypatch, original)
+    result, out, report = _run(original, tmp_path, "--null", "Count")
+    md = (report / "REPORT.md").read_text(encoding="utf-8")
+    appendix = md.split("\n## Appendix\n", 1)[1]
+    warnings = [line for line in appendix.splitlines() if "dtype" in line or "data type" in line]
+    assert any("[Count]" in line for line in warnings), warnings
+    assert any("[Score]" in line for line in warnings), warnings

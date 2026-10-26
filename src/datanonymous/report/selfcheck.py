@@ -168,11 +168,17 @@ def _quoting_shows(st: SyntheticTable, pos: int, a: ColumnQuoting, b: ColumnQuot
     return csvio.column_text(vals, a, t) != csvio.column_text(vals, b, t)
 
 
-def dtype_messages(src: list[str] | None, out: list[str] | None, header: list[str]) -> list[str]:
-    """pandas dtype drift between source and output (warnings, never a FAIL)."""
+def dtype_drift(src: list[str] | None, out: list[str] | None, header: list[str]) -> list[tuple[str | None, str]]:
+    """pandas dtype drift between source and output as (column, text), the column None when the drift is the whole
+    file's (warnings, never a FAIL)."""
     if src is not None and out is None:
-        return ["pandas reads the source with default settings but cannot read the output"]
+        return [(None, "pandas reads the source with default settings but cannot read the output")]
     if src is None or out is None or len(src) != len(out):
         return []
-    return [f"column {h!r}: pandas reads {a} from the source but {b} from the output"
+    return [(h, f"column {h!r}: pandas reads {a} from the source but {b} from the output")
             for h, a, b in zip(header, src, out) if a != b]
+
+
+def dtype_messages(src: list[str] | None, out: list[str] | None, header: list[str]) -> list[str]:
+    """pandas dtype drift between source and output (warnings, never a FAIL)."""
+    return [text for _, text in dtype_drift(src, out, header)]

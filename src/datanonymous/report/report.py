@@ -59,6 +59,7 @@ leak scan can check the report before :func:`write_report_files` writes it.
 from __future__ import annotations
 
 import csv
+from collections import Counter
 import datetime as _dt
 import functools
 import importlib.metadata as md
@@ -930,7 +931,7 @@ def run_json(run: RunResult, min_cell: int = 10) -> dict[str, Any]:
         "seed_was_random": run.seed_was_random,
         "verdict": verdict(run, fcs, min_cell),
         "totals": run.totals(), "files": files,
-        "skipped": [{"path": s.rel_path, "reason": s.reason} for s in run.skipped],
+        "skipped": [{"path": s.rel_path, "reason": s.reason, "kind": skip_kind(s)} for s in run.skipped],
         "failures": [{"source": f.rel_path, "reasons": f.reasons, "fixes": f.fixes,
                       "fix_commands": [c for x in f.fixes for c in fix_commands(x, _candidates(f))]}
                      for f in run.files if f.failed],
@@ -1087,16 +1088,149 @@ def nulled_columns(run: RunResult) -> list[tuple[str, str, bool, str, str]]:
     return out
 
 
+#: First line of REPORT.md and the console's private-folder wording: the report describes the source data
+PRIVATE_BANNER = "PRIVATE – DO NOT SHARE"
+
+
+def skip_kind(s: Any) -> str:
+    """``deselected`` (left out by --include / --exclude-path), ``routine`` (not a table format at all: a PDF, an
+    image, a Word document) or ``actionable`` (looks tabular but could not be read or is not supported)."""
+    return "deselected" if s.deselected else "routine" if s.routine else "actionable"
+
+
+def routine_skip_line(run: RunResult) -> str | None:
+    """One line for every routine skipped input, with counts by extension: ``4 non-table files skipped (3 .pdf,
+    1 .png)``; None when there were none."""
+    routine = [s for s in run.skipped if skip_kind(s) == "routine"]
+    if not routine:
+        return None
+    counts = Counter(s.ext or "other" for s in routine)
+    parts = ", ".join(f"{n} {ext}" for ext, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
+    n = len(routine)
+    return f"{n} non-table file{'s' if n != 1 else ''} skipped ({parts})"
+
+
+def deselected_line(run: RunResult) -> str | None:
+    n = sum(1 for s in run.skipped if skip_kind(s) == "deselected")
+    return f"{n} input{'s' if n != 1 else ''} left out by --include / --exclude-path" if n else None
+
+
+def written_files(run: RunResult) -> list[tuple[str, int, int]]:
+    """(output path, rows, columns) of every file written to the output folder."""
+    out = []
+    for fr in run.files:
+        if not fr.written or fr.withheld:
+            continue
+        facts = [selfcheck.facts(tp) for tp in fr.tables]
+        rows = (sum(f["rows_out"] for f in facts) if facts and all(f is not None for f in facts)
+                else sum(t.n_rows for t in fr.tables))
+        out.append((fr.out_rel_path, rows, sum(len(t.columns) for t in fr.tables)))
+    return out
+
+
+def written_line(run: RunResult) -> str:
+    n = len(written_files(run))
+    return f"{n} file{'s' if n != 1 else ''} written" if n else "No files were written"
+
+
+#: how an operator can act on a column sharing mode nulled on its own
+AUTO_NULL_FIX_MD = ("If it holds IDs, declare it with `--id-col`; if you do not want an empty column, leave it out "
+                    "with `--exclude`.")
+AUTO_NULL_FIX_PLAIN = AUTO_NULL_FIX_MD.replace("`", "")
+
+
+def attention_items(run: RunResult, data: dict[str, Any], markdown: bool = True) -> list[tuple[str, str, list[str]]]:
+    """What needs the operator's attention, as (where, text, fixes): files left out, actionable skipped inputs, run
+    errors, columns nulled automatically and (sharing mode) warnings that block a file. Routine skipped inputs and
+    inputs deselected on purpose are not here."""
+    sharing = run.data_mode == "sharing"
+    where_of = (lambda p: code_span(_md(p))) if markdown else (lambda p: p)
+    esc = _md if markdown else (lambda x: x)
+    by_source = {fr.rel_path: fr for fr in run.files}
+    items: list[tuple[str, str, list[str]]] = []
+    for f in data["failures"]:
+        fr = by_source.get(f["source"])
+        cands = _candidates(fr)
+        if sharing and fr is not None:
+            found = failure_findings(fr, True, cands, markdown)
+            text = " ".join(dict.fromkeys(t for t, _ in found))
+            fixes = list(dict.fromkeys(fx for _, fx in found if fx))
+        else:
+            text = esc("; ".join(f["reasons"]))
+            fixes = [fix_markdown(fx, cands) if markdown else fix_plain(fx, cands) for fx in dict.fromkeys(f["fixes"])]
+        items.append((where_of(f["source"]), f"not written. Reason: {text}", fixes))
+    for s in run.skipped:
+        if skip_kind(s) != "actionable":
+            continue
+        text, fix = plain_finding(s.code or "skipped", "warning", s.reason, None, sharing, (), markdown)
+        items.append((where_of(s.rel_path), text, [fix] if fix else []))
+    run_cands = _run_candidates(run)
+    for e in data["errors"]:
+        text, fix = plain_finding(e["code"], "error", e["text"], e.get("fix"), sharing, run_cands, markdown)
+        items.append(("run", text, [fix] if fix else []))
+    for file, column, automatic, reason, alternative in nulled_columns(run):
+        if automatic:
+            why = (f"nulled automatically (written with every cell empty) because {esc(reason)}" if reason
+                   else "nulled automatically (written with every cell empty)")
+            items.append((f"{where_of(file)} {code_span(column) if markdown else column}", why,
+                          [esc(alternative) if alternative else AUTO_NULL_FIX_MD if markdown else AUTO_NULL_FIX_PLAIN]))
+    for w in data["warnings"]:
+        if not _shown_warning(w, sharing):
+            continue
+        fr = by_source.get(w.get("file")) if w.get("file") else None
+        cands = _candidates(fr) if fr is not None else run_cands
+        text, fix = plain_finding(w["code"], "warning", w["text"], w.get("fix"), True, cands, markdown)
+        where = where_of(w["file"]) if w.get("file") else "run"
+        if w.get("column"):
+            where += f" [{esc(w['column'])}]"
+        items.append((where, text, [fix] if fix else []))
+    return items
+
+
+def _shown_warning(w: dict[str, Any], sharing: bool) -> bool:
+    """True when a warning blocks a file in sharing mode: it is listed under "What needs attention", not in the
+    Appendix's warnings."""
+    entry = catalogue.lookup(w["code"])
+    return sharing and entry is not None and entry.kind == catalogue.PROBLEM
+
+
 def run_markdown(run: RunResult, data: dict[str, Any]) -> str:
     sharing = run.data_mode == "sharing"
     v = data["verdict"]
     t = data["totals"]
-    lines = ["# datanonymous run report", "", "## Verdict", "", f"Overall verdict: {v['overall']}", "",
-             f"Rule: {v['rule']}. Exit code: {v['exit_code']}.", "",
-             "Counts are numbers of files; N/A = the check did not run (the file FAILed earlier); INFO = "
-             "informational only.", "",
-             "| Check | Key | Result | PASS | WARN | FAIL | N/A | INFO | What it checks |",
-             "|---|---|---|---|---|---|---|---|---|"]
+    run_cands = _run_candidates(run)
+    done = written_files(run)
+    lines = [f"# {PRIVATE_BANNER}", "",
+             "This is the private report of a datanonymous run. It describes the source data: keep it out of "
+             "anything you share, and send only the synthetic files.", "",
+             "## What was generated", "",
+             f"{written_line(run)} to the output folder {code_span(_posix(run.out_dir))}." if done
+             else f"{written_line(run)}."]
+    if done:
+        lines += ["", "| File | Rows | Columns |", "|---|---|---|"]
+        lines += [f"| {code_span(_md(path))} | {rows} | {cols} |" for path, rows, cols in done]
+    for extra in (routine_skip_line(run), deselected_line(run)):
+        if extra:
+            lines += ["", extra + "."]
+    lines += ["", "<!-- What changed: reserved for the \"What changed\" section (a later ticket fills it); "
+                  "omitted until it has content -->", "", "## What needs attention", ""]
+    items = attention_items(run, data)
+    if not items:
+        lines += ["Nothing needs attention.", ""]
+    for where, text, fixes in items:
+        lines.append(f"- {where}: {text}")
+        lines += [f"  - Fix: {fx}" for fx in fixes]
+    if items:
+        lines.append("")
+    lines += ["## Appendix", "",
+              "The details behind the sections above, for review: the verdict and its criteria, per-file checks, "
+              "statistics, utility warnings, notes and every skipped input.", "",
+              "### Verdict", "", f"Overall verdict: {v['overall']}", "",
+              f"Rule: {v['rule']}. Exit code: {v['exit_code']}.", "",
+              "Counts are numbers of files; N/A = the check did not run (the file FAILed earlier); INFO = "
+              "informational only.", "",
+              "| Check | Key | Result | PASS | WARN | FAIL | N/A | INFO | What it checks |",
+              "|---|---|---|---|---|---|---|---|---|"]
     for c in v["criteria"]:
         n = c["counts"]
         if c["key"] in ("run_errors", "run_warnings"):
@@ -1130,13 +1264,13 @@ def run_markdown(run: RunResult, data: dict[str, Any]) -> str:
     lines += ["Adjusted flags never fail a check: `rare_category_adjusted` means every source level and NA token "
               "was kept at least once (which changed a count); `extreme_value_adjusted` means the exact source "
               "minimum and maximum were emitted (D14). Their deviation is reported, not an error.", ""]
-    lines += ["## Run", "",
+    lines += ["### Run", "",
               f"- Input: {code_span(_posix(run.input))}", f"- Out dir: {code_span(_posix(run.out_dir))}",
               f"- Report dir: {code_span(_posix(run.report_dir))}",
               f"- Seed: {run.seed}" + (" (random; pass --seed to reproduce)" if run.seed_was_random else ""),
               f"- Files: {t['files']} tabular ({t['PASS']} PASS, {t['WARN']} WARN, {t['FAIL']} FAIL), "
               f"{t['skipped']} skipped", "",
-              "## Files", "",
+              "### Files", "",
               "| Status | Source | Output | Rows in | Rows out | Columns | Warnings | Details |",
               "|---|---|---|---|---|---|---|---|"]
     for f in data["files"]:
@@ -1147,39 +1281,18 @@ def run_markdown(run: RunResult, data: dict[str, Any]) -> str:
                      f"| {f['columns'] if f['columns'] is not None else '-'} "
                      f"| {f['warnings']} | [{_md(f['report'])}]({link_target(f['report'])}) |")
     lines.append("")
-    by_source = {fr.rel_path: fr for fr in run.files}
     if data["skipped"]:
-        lines += ["## Skipped (not copied)", ""]
+        lines += ["### Skipped inputs (not copied)", ""]
         for s in data["skipped"][:500]:
-            lines.append(f"- {code_span(_md(s['path']))}: {fix_markdown(s['reason'])}")
+            lines.append(f"- {code_span(_md(s['path']))} ({s['kind']}): {fix_markdown(s['reason'])}")
         if len(data["skipped"]) > 500:
             lines.append(f"- ... {len(data['skipped']) - 500} more in report.json")
         lines.append("")
-    if data["failures"]:
-        lines += ["## Failures", ""]
-        for f in data["failures"]:
-            cands = _candidates(by_source.get(f["source"]))
-            if sharing and by_source.get(f["source"]) is not None:
-                found = failure_findings(by_source[f["source"]], True, cands)
-                lines.append(f"- {code_span(_md(f['source']))}: not written. Reason: "
-                             + " ".join(dict.fromkeys(text for text, _ in found)))
-                for fx in dict.fromkeys(fix for _, fix in found if fix):
-                    lines.append(f"  - Fix: {fx}")
-                continue
-            lines.append(f"- {code_span(_md(f['source']))}: not written. Reason: {_md('; '.join(f['reasons']))}")
-            for fx in dict.fromkeys(f["fixes"]):
-                lines.append(f"  - Fix: {fix_markdown(fx, cands)}")
-        lines.append("")
-    run_cands = _run_candidates(run)
-    if data["errors"]:
-        lines += ["## Run errors", ""]
-        for e in data["errors"]:
-            text, fix = plain_finding(e["code"], "error", e["text"], e.get("fix"), sharing, run_cands)
-            lines.append(f"- {text}" + (f" Fix: {fix}" if fix else ""))
-        lines.append("")
-    if data["warnings"]:
-        lines += ["## Warnings", ""]
-        for w in data["warnings"]:
+    by_source = {fr.rel_path: fr for fr in run.files}
+    other_warnings = [w for w in data["warnings"] if not _shown_warning(w, sharing)]
+    if other_warnings:
+        lines += ["### Warnings", ""]
+        for w in other_warnings:
             where = code_span(_md(w["file"])) if w.get("file") else "run"
             col = f" [{_md(w['column'])}]" if w.get("column") else ""
             cands = _candidates(by_source.get(w.get("file"))) if w.get("file") else run_cands
@@ -1188,7 +1301,7 @@ def run_markdown(run: RunResult, data: dict[str, Any]) -> str:
         lines.append("")
     nulled = nulled_columns(run)
     if nulled:
-        lines += ["## Nulled columns", "",
+        lines += ["### Nulled columns", "",
                   "Written with their header and position kept and every cell empty; their real values appear "
                   "nowhere in the output.", ""]
         for file, column, automatic, reason, alternative in nulled:
@@ -1223,7 +1336,7 @@ def run_markdown(run: RunResult, data: dict[str, Any]) -> str:
         fix = f" Fix: {fix_markdown(n['fix'], run_cands)}" if n.get("fix") else ""
         out_notes.append(f"- INFO {where}{col}: {_period(_md(n['text']))}{fix}")
     if out_notes:
-        lines += ["## Notes", ""] + out_notes + [""]
+        lines += ["### Notes", ""] + out_notes + [""]
     return "\n".join(lines)
 
 
@@ -1232,30 +1345,32 @@ def console_summary(run: RunResult) -> list[str]:
     fcs = [file_checks(fr) for fr in run.files]
     v = verdict(run, fcs)
     lines = [f"datanonymous {__version__}  seed={run.seed}"
-             + ("  (random; pass --seed to reproduce)" if run.seed_was_random else "")]
+             + ("  (random; pass --seed to reproduce)" if run.seed_was_random else ""),
+             "What was generated"]
     for fr in run.files:
+        if fr.failed:
+            continue
         rows = sum(t.n_rows for t in fr.tables) if fr.tables else 0
         ncol = sum(len(t.columns) for t in fr.tables) if fr.tables else 0
-        cands = _candidates(fr)
-        if fr.failed and run.data_mode == "sharing":
-            found = failure_findings(fr, True, cands, markdown=False)
-            fixes = list(dict.fromkeys(fix for _, fix in found if fix))
-            lines.append(f"  FAIL  {fr.rel_path}  (not written): {' '.join(dict.fromkeys(t for t, _ in found))}"
-                         + (f"  fix: {'; '.join(fixes)}" if fixes else ""))
-        elif fr.failed:
-            fixes = [fix_plain(f, cands) for f in dict.fromkeys(fr.fixes)]
-            lines.append(f"  FAIL  {fr.rel_path}  (not written): {'; '.join(fr.reasons)}"
-                         + (f"  fix: {'; '.join(fixes)}" if fixes else ""))
-        else:
-            n_warn = len(_messages(fr, ("warning",)))
-            lines.append(f"  {fr.status.value:4}  {fr.rel_path} -> {fr.out_rel_path}  ({rows} rows, {ncol} cols)"
-                         + (f"  {n_warn} warning(s)" if n_warn else ""))
-    for s in run.skipped:
-        lines.append(f"  SKIP  {s.rel_path}  ({s.reason})")
-    for m in run.messages:
-        if m.level != "info":
-            text, fix = plain_finding(m.code, m.level, m.text, m.fix, run.data_mode == "sharing", markdown=False)
-            lines.append(f"  {m.level.upper()}: {text}" + (f"  fix: {fix}" if fix and run.data_mode == "sharing" else ""))
+        n_warn = len(_messages(fr, ("warning",)))
+        lines.append(f"  {fr.status.value:4}  {fr.rel_path} -> {fr.out_rel_path}  ({rows} rows, {ncol} cols)"
+                     + (f"  {n_warn} warning(s)" if n_warn else ""))
+    lines.append(f"  {written_line(run)}")
+    for extra in (routine_skip_line(run), deselected_line(run)):
+        if extra:
+            lines.append(f"  {extra}")
+    lines.append("What needs attention")
+    items = attention_items(run, run_json(run), markdown=False)
+    if not items:
+        lines.append("  Nothing needs attention.")
+    for where, text, fixes in items:
+        lines.append(f"  {where}: {text}" + (f"  fix: {'; '.join(fixes)}" if fixes else ""))
+    sharing = run.data_mode == "sharing"
+    others = [m for m in run.messages if m.level == "warning" and not _shown_warning({"code": m.code}, sharing)]
+    if others:
+        lines.append("Other run warnings (details in the report's Appendix)")
+        for m in others:
+            lines.append(f"  {m.text}")
     t = run.totals()
     lines.append(f"Totals: {t['files']} file(s): {t['PASS']} PASS, {t['WARN']} WARN, {t['FAIL']} FAIL; "
                  f"{t['skipped']} skipped")

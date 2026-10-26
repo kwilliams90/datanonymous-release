@@ -32,6 +32,8 @@ names are matched exactly (raw header text). ``COL=VALUE`` is split on the last
 from __future__ import annotations
 
 import dataclasses
+import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -95,6 +97,7 @@ _SCALARS = (
     "mode",
     "factor_max", "decimal", "no_default_ids", "min_cell", "encoding", "delimiter", "sheet",
     "header_row", "seed", "force", "max_row_matches", "no_strict", "id_check", "keep_titles", "all_or_nothing",
+    "output_root", "report_root",
 )
 _CONFIG_ONLY = ("rules", "structure")
 #: Options that decide what a column IS (one of them wins, ``detect/types.py``). A CLI option of this
@@ -161,6 +164,12 @@ class Settings:
     #: sharing mode: write nothing unless every input file is written (the default leaves out only the files
     #: that cannot be written safely and lists them in the report folder's sharing-failures.csv)
     all_or_nothing: bool = False
+    #: standing folders (config only): each run writes to ``<output_root>/<input>-<timestamp>/`` and its report to
+    #: ``<report_root>/<same name>/`` (``rundirs.py``)
+    output_root: str | None = None
+    report_root: str | None = None
+    #: the config files this run loaded (user config, then ``--config``), for the run summary
+    config_files: list[str] = field(default_factory=list)
     verbosity: int = 0
     json_output: bool = False
     # config-only
@@ -346,6 +355,37 @@ def load_config(path: str | Path) -> dict[str, Any]:
     return norm
 
 
+def user_config_path() -> Path:
+    """The user-level config file, loaded automatically when it exists: ``config.yaml`` in the platform's user
+    config folder (``%APPDATA%`` on Windows, Application Support on macOS, ``$XDG_CONFIG_HOME`` or ``~/.config``
+    elsewhere), under ``datanonymous``. ``DATANONYMOUS_CONFIG_DIR`` names that folder instead (tests use it)."""
+    override = os.environ.get("DATANONYMOUS_CONFIG_DIR")
+    if override:
+        return Path(override) / "config.yaml"
+    if sys.platform == "win32":
+        base = Path(os.environ.get("APPDATA") or Path.home() / "AppData" / "Roaming")
+    elif sys.platform == "darwin":
+        base = Path.home() / "Library" / "Application Support"
+    else:
+        base = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+    return base / "datanonymous" / "config.yaml"
+
+
+def load_layered_config(config_path: str | Path | None) -> tuple[dict[str, Any], list[str]]:
+    """User config, then ``--config`` on top (an option set in the later file replaces the earlier one):
+    the merged raw config and the files it came from."""
+    merged: dict[str, Any] = {}
+    files: list[str] = []
+    user = user_config_path()
+    if user.is_file():
+        merged.update(load_config(user))
+        files.append(str(user))
+    if config_path:
+        merged.update(load_config(config_path))
+        files.append(str(config_path))
+    return merged, files
+
+
 def build_settings(cli: dict[str, Any], config: dict[str, Any] | None = None) -> Settings:
     """Combine defaults < config < CLI into :class:`Settings`.
 
@@ -374,6 +414,10 @@ def build_settings(cli: dict[str, Any], config: dict[str, Any] | None = None) ->
         if val is None:
             continue
         setattr(s, name, val)
+    for name in ("output_root", "report_root"):
+        val = getattr(s, name)
+        if val is not None and (not isinstance(val, str) or not val.strip()):
+            raise UsageError(f"{name} must be a folder path")
     s.rules = config.get("rules")
     s.structure = config.get("structure")
     for name in ("config_path", "verbosity", "json_output"):

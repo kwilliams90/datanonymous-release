@@ -28,7 +28,7 @@ from typing import Any, Callable
 import click
 
 from . import __version__, diagnostics
-from .config import build_settings, load_config
+from .config import build_settings, load_layered_config
 from .errors import DatanonymousError, UsageError
 
 EXIT_OK, EXIT_ERROR, EXIT_USAGE, EXIT_FAILED = 0, 1, 2, 3
@@ -133,11 +133,18 @@ def common_options(f: Callable[..., Any]) -> Callable[..., Any]:
 
 
 def _settings(kw: dict[str, Any]):  # noqa: ANN202
-    config = load_config(kw["config_path"]) if kw.get("config_path") else {}
+    config, config_files = load_layered_config(kw.get("config_path"))
     cli = dict(kw)
     cli["verbosity"] = -1 if cli.pop("quiet", False) else cli.pop("verbose", 0)
     cli.pop("verbose", None)
-    return build_settings(cli, config)
+    settings = build_settings(cli, config)
+    settings.config_files = config_files
+    return settings
+
+
+def config_lines(settings: Any) -> list[str]:
+    """Which config file(s) the run loaded, so standing settings are never invisible."""
+    return [f"Config loaded: {f}" for f in settings.config_files]
 
 
 def _screened(text: str) -> str:
@@ -186,9 +193,10 @@ def main() -> None:
 
 @main.command("run")
 @click.argument("input", type=click.Path(path_type=Path))
-@click.option("--out-dir", "out_dir", required=True, type=click.Path(file_okay=False, path_type=Path),
+@click.option("--out-dir", "out_dir", default=None, type=click.Path(file_okay=False, path_type=Path),
               help="Folder for the synthetic files (+ README, DATA_DICTIONARY, schema). Must be a new or empty "
-                   "folder outside the input and the report folder (it is created if missing).")
+                   "folder outside the input and the report folder (it is created if missing). Required unless "
+                   "a config file sets output_root and report_root (then each run gets its own folder).")
 @click.option("--report-dir", "report_dir", default=None, type=click.Path(file_okay=False, path_type=Path),
               help="Folder for the report, kept locally (default: <out-dir>-report). A new or empty folder; it may "
                    "be inside the input.")
@@ -203,7 +211,7 @@ def main() -> None:
 @click.option("--keep-titles", is_flag=True, default=False,
               help="Copy Excel title/notes rows and CSV footer notes verbatim (default: same-shape placeholders).")
 @common_options
-def run_cmd(input: Path, out_dir: Path, report_dir: Path | None, **kw: Any) -> None:
+def run_cmd(input: Path, out_dir: Path | None, report_dir: Path | None, **kw: Any) -> None:
     """Profile INPUT (file or directory) and write synthetic copies to --out-dir."""
     verbose = bool(kw.get("verbose"))
 
@@ -214,9 +222,11 @@ def run_cmd(input: Path, out_dir: Path, report_dir: Path | None, **kw: Any) -> N
         settings = _settings(kw)
         result = pipeline.execute(settings, input, out_dir, report_dir, mode="run")
         if settings.json_output:
-            click.echo(json.dumps(finite_json(run_json(result)), indent=2, ensure_ascii=True, allow_nan=False))
+            payload = run_json(result)
+            payload["config_files"] = list(settings.config_files)
+            click.echo(json.dumps(finite_json(payload), indent=2, ensure_ascii=True, allow_nan=False))
         elif settings.verbosity >= 0:
-            for line in console_summary(result):
+            for line in config_lines(settings) + console_summary(result):
                 _echo(line)
         if verbose:
             for d in result.debug:

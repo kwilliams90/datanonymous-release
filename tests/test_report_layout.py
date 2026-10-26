@@ -145,9 +145,11 @@ def test_an_auto_nulled_column_is_under_attention_with_its_reason_and_an_alterna
     education = ("Qorvath Diploma", "Belmira Certificate", "Tandrel Degree")
     with (original / "roster.csv").open("w", encoding="utf-8", newline="") as stream:
         writer = csv.writer(stream, lineterminator="\n")
-        writer.writerow(["Student_ID", "Parental_Education_Level", "Score"])
+        # two continuous scores, so no written row can equal a real one once the column is nulled
+        writer.writerow(["Student_ID", "Parental_Education_Level", "Score", "Other_Score"])
         for i in range(60):
-            writer.writerow([student_id(i), education[i // 20], f"{(5100 + i * 73) / 100:.2f}"])
+            writer.writerow([student_id(i), education[i // 20], f"{(5100 + i * 73) / 100:.2f}",
+                             f"{(4000 + (i * 571) % 3999) / 100:.2f}"])
     result, out, report = _run(original, tmp_path)
     assert result.exit_code == 0, result.output
     md = (report / "REPORT.md").read_text(encoding="utf-8")

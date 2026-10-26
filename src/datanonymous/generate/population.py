@@ -5,17 +5,21 @@ relationship *contracts*. Generation uses numbered fictional slots. No original
 key-to-output assignment or original row order is used. The original keys remain
 an exclusion set for drawing non-real identifiers.
 
-The first sharing policy refuses rare primary count/identifier-format classes
-rather than claiming that assigning their statistics to another person hides
-their unique donor. Secondary degrees are regenerated, not preserved (D48).
+The first sharing policy refuses rare identifier-format classes rather than
+claiming that assigning their statistics to another person hides their unique
+donor. Rare primary rows-per-person count classes are rebalanced into held
+classes with an exact row total (ADR-0003), or refused when that is impossible.
+Secondary degrees are regenerated, not preserved (D48).
 """
 
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
+from functools import reduce
+from math import gcd
 from typing import Any
 
 import numpy as np
@@ -31,6 +35,8 @@ from .ids import (IdNamespace, IdRegistry, RealUsers, _conform, _is_digit_rep,
 from .rng import stream
 
 PLAN_KEY = "_sharing_population"
+#: the informational message of a table whose rare rows-per-person count classes were rebalanced (ADR-0003)
+REBALANCED_CODE = "count_classes_rebalanced"
 
 
 @dataclass(frozen=True)
@@ -78,6 +84,8 @@ class _Table:
     groups: list[list[int]]
     counts: np.ndarray
     unique_pairs: list[tuple[int, int]]
+    #: people in the table minus people in the source, when rare count classes were rebalanced (else None)
+    rebalanced: int | None = None
 
 
 class PopulationRefusal(UnsupportedColumnError):
@@ -158,20 +166,28 @@ def _table_spec(fr: Any, ti: int, namespaces: dict[int, str], minimum: int) -> _
                     error.fix) from error
     primary = tp.entity.primary
     counts = np.empty(0, dtype=np.int64)
-    if primary is not None and tp.n_rows:
-        counts = np.asarray(sorted(Counter(keys[primary]).values()), dtype=np.int64)
-        if any(n < minimum for n in Counter(counts.tolist()).values()):
-            _refuse("a primary-person rows-per-ID count class has fewer than --min-cell donors; "
-                    "its exact count distribution cannot be released")
     groups = [list(group) for group in tp.entity.aliases]
     seen = {c for group in groups for c in group}
     groups += [[c] for c in tp.entity.id_columns if c not in seen]
+    rebalanced = None
+    if primary is not None and tp.n_rows:
+        source = Counter(Counter(keys[primary]).values())
+        classes = _rebalance_counts(source, minimum)
+        if classes is None:
+            _refuse("a primary-person rows-per-ID count class has fewer than --min-cell donors and cannot be "
+                    "moved into a held count class with an exact row total; its count cannot be released")
+        counts = np.asarray([k for k, h in sorted(classes.items()) for _ in range(h)], dtype=np.int64)
+        if classes != source:
+            rebalanced = len(counts) - sum(source.values())
+            # the primary person (and its one-to-one aliases) now has as many fictional people as there are counts
+            for col in next(group for group in groups if primary in group):
+                cards[col] = len(counts)
     pairs = []
     for j, a in enumerate(tp.entity.id_columns):
         for b in tp.entity.id_columns[j + 1:]:
             if len(set(zip(keys[a], keys[b]))) == tp.n_rows:
                 pairs.append((a, b))
-    return _Table((fr.rel_path, ti), tp, namespaces, shapes, cards, groups, counts, pairs)
+    return _Table((fr.rel_path, ti), tp, namespaces, shapes, cards, groups, counts, pairs, rebalanced)
 
 
 def _fold_widths(widths: Counter[int], minimum: int) -> Counter[int]:
@@ -187,6 +203,76 @@ def _fold_widths(widths: Counter[int], minimum: int) -> Counter[int]:
     for width, count in widths.items():
         out[width if width in held else min(held, key=lambda w: (abs(w - width), -w))] += count
     return out
+
+
+def _rebalance_counts(classes: Counter[int], minimum: int) -> Counter[int] | None:
+    """Move the people of each rows-per-person count class held by fewer than ``minimum`` people into held classes.
+
+    ``classes`` maps a row count to the number of people holding it. Every count in the result is one that
+    ``minimum`` source people hold, and the row total is exact (ADR-0003). Each rare person takes the nearest held
+    count (the larger on a tie, as for ID widths); the rows that leaves over or short are made up by moving people
+    one held class up or down, next to the rare counts first, so the number of people stays the source's where it
+    can. Only when no such move fits is a person dropped (from the held class nearest the rare counts) or added,
+    so the number of people may differ from the source. None when no class is held or no exact total exists.
+    """
+    held = sorted(k for k, h in classes.items() if h >= minimum)
+    rare = sorted(k for k, h in classes.items() if h < minimum)
+    if not rare:
+        return Counter(classes)
+    total = sum(k * h for k, h in classes.items())
+    if not held or total % reduce(gcd, held):
+        return None
+
+    def distance(k: int) -> int:
+        return min(abs(k - c) for c in rare)
+
+    out: Counter[int] = Counter({k: classes[k] for k in held})
+    for c in rare:
+        out[min(held, key=lambda k: (abs(k - c), -k))] += classes[c]
+    while True:
+        gap = _shift(out, held, total - sum(k * h for k, h in out.items()), distance)
+        if not gap:
+            return +out
+        if gap > 0 and (parts := _parts(gap, held, distance)) is not None:
+            out.update(parts)
+            return +out
+        donors = [k for k in held if out[k]]
+        if not donors:
+            return None
+        out[min(donors, key=lambda k: (distance(k), -k))] -= 1
+
+
+def _shift(out: Counter[int], held: list[int], gap: int, distance: Callable[[int], int]) -> int:
+    """Close ``gap`` rows by moving people between neighbouring held classes, nearest the rare counts first; the
+    rows still left over (positive) or in excess (negative) are returned."""
+    while gap:
+        moves = [(a, b) for a, b in zip(held, held[1:]) if b - a <= abs(gap) and out[a if gap > 0 else b]]
+        if not moves:
+            return gap
+        a, b = min(moves, key=lambda m: (min(distance(m[0]), distance(m[1])), -m[1]))
+        source, target = (a, b) if gap > 0 else (b, a)
+        moved = min(out[source], abs(gap) // (b - a))
+        out[source] -= moved
+        out[target] += moved
+        gap -= moved * (target - source)
+    return gap
+
+
+def _parts(rows: int, held: list[int], distance: Callable[[int], int]) -> Counter[int] | None:
+    """The fewest new people whose held counts add up to ``rows`` (nearest the rare counts on a tie), or None."""
+    best: list[tuple[int, int, int] | None] = [(0, 0, 0)] + [None] * rows
+    for value in range(1, rows + 1):
+        options = [(best[value - k][0] + 1, best[value - k][1] + distance(k), k)
+                   for k in held if k <= value and best[value - k] is not None]
+        best[value] = min(options, key=lambda o: (o[0], o[1], -o[2])) if options else None
+    if best[rows] is None:
+        return None
+    parts: Counter[int] = Counter()
+    while rows:
+        k = best[rows][2]
+        parts[k] += 1
+        rows -= k
+    return parts
 
 
 def _columns(ns: IdNamespace) -> str:
@@ -572,8 +658,19 @@ def plan_population(files: list[Any], seed: int, settings: Any, reg: IdRegistry,
             for array in [*values.values(), *slots.values(), index]:
                 array.flags.writeable = False
             plans[table.key] = TablePopulation(values, index, len(counts), slots)
+    by_path = {fr.rel_path: fr for fr in files}
     for table in tables:
         table.profile.private.extra[PLAN_KEY] = plans[table.key]
+        if table.rebalanced is not None:
+            fr = by_path[table.key[0]]
+            name = f"table {table.profile.name!r}: " if table.profile.name is not None else ""
+            people = ("the same number of people as the source" if not table.rebalanced else
+                      f"{abs(table.rebalanced)} {'more' if table.rebalanced > 0 else 'fewer'} "
+                      f"{'person' if abs(table.rebalanced) == 1 else 'people'} than the source")
+            text = (f"{name}rows per person rebalanced: people with a rare number of rows were given common row "
+                    f"counts and the row total kept; {people}")
+            fr.messages = [m for m in fr.messages if not (m.code == REBALANCED_CODE and m.text == text)]
+            fr.messages.append(Message("info", REBALANCED_CODE, text))
     for key, ns in planned.items():
         reg.namespaces[key].identity = ns.identity
     return plans

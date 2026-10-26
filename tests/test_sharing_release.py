@@ -250,6 +250,30 @@ def _write_csv(path: Path, rows: list[dict[str, str]]) -> None:
         writer.writerows(rows)
 
 
+def test_a_rare_rows_per_person_count_is_rebalanced_and_the_table_written(tmp_path):
+    # one person has 47 events; every other rows-per-person count (2 and 3) is held by many people (ADR-0003)
+    original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
+    original.mkdir()
+    ids = [f"S{410003 + i * 37:06d}" for i in range(100)]
+    counts = [2] * 50 + [3] * 49 + [47]
+    _write_csv(original / "roster.csv", [{"Student_ID": s, "Grade": str(6 + i % 4),
+                                          "Assessment_Score": f"{(5500 + (i * 71) % 3500) / 100:.2f}"}
+                                         for i, s in enumerate(ids)])
+    _write_csv(original / "events.csv", [{"Student_ID": s, "Event_Type": ("Review", "Checkin")[(i + e) % 2],
+                                          "Participation_Score": f"{(5000 + (i * 149 + e * 67) % 4000) / 100:.2f}"}
+                                         for i, (s, n) in enumerate(zip(ids, counts)) for e in range(n)])
+    run = execute(Settings(mode="sharing", seed=1), original, output, report)
+    assert run.package["released"] and exit_code(run) == 0, (_diagnostic(run), [f.reasons for f in run.files])
+    events = read_records(output / "events.csv")
+    assert len(events) == sum(counts)  # N exact
+    per_person = Counter(r["Student_ID"] for r in events)
+    assert set(per_person.values()) <= {2, 3}  # only held counts: no one has 47 rows
+    roster = {r["Student_ID"] for r in read_records(output / "roster.csv")}
+    assert set(per_person) <= roster and not roster & set(ids)  # the join holds among fictional people
+    assert "INFO rows per person rebalanced" in (report / "files" / "events.csv.md").read_text(encoding="utf-8")
+    assert "rebalanced" not in (report / "files" / "roster.csv.md").read_text(encoding="utf-8")
+
+
 def test_row_numbers_left_without_their_roster_are_not_kept_as_row_numbers(tmp_path):
     # The roster's Student_ID is the row numbers 1..100 (kept as they are, D9); its rare State_Student_ID format
     # leaves it out. The child's 31..50 are not row numbers on their own: they get fictional IDs that are no real ID

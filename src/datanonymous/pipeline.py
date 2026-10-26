@@ -185,7 +185,7 @@ from . import diagnostics, paths
 from .config import Settings, validate
 from .detect import dates as dates_detect
 from .discover import check_dirs, default_report_dir, discover
-from .errors import DatanonymousError, NotTabular, UsageError
+from .errors import ColumnRefusal, DatanonymousError, NotTabular, UsageError
 from .generate import numeric as numeric_gen
 from .generate import pii, pseudonyms
 from .generate.ids import IdRegistry
@@ -504,10 +504,33 @@ def _first_rows(entity_index: np.ndarray | None, n_entities: int) -> np.ndarray 
     return first
 
 
+def _request_null_after_refusal(fr: FileResult, settings: Settings, run: RunResult, t_i: int | None,
+                                refusal: ColumnRefusal) -> None:
+    """ADR-0001, a refusal raised while table ``t_i`` of ``fr`` was generated: when its column is not a key, not in a
+    structural relationship and not nulled already, record a null request (``RunResult.null_requests``), so
+    ``execute`` profiles and generates the whole run again with the column nulled, as for a column-scoped finding.
+    Otherwise (or with ``--refuse-unsupported``) nothing is recorded and the file is left out, as before."""
+    if settings.mode != "sharing" or settings.refuse_unsupported or t_i is None:
+        return
+    from .profile.sharing import _catalogue_fix, _key_or_related
+
+    tp = fr.tables[t_i]
+    i = refusal.index
+    if not (0 <= i < len(tp.columns)) or tp.columns[i].name != refusal.column:
+        return
+    if tp.columns[i].role in ("null", "excluded") or _key_or_related(tp, i):
+        return
+    run.null_requests.setdefault(fr.rel_path, {}).setdefault(t_i, {})[i] = (refusal.plain, _catalogue_fix(refusal.code))
+
+
 def generate_file(fr: FileResult, settings: Settings, run: RunResult, reg: IdRegistry,
                   namespaces: dict[tuple[str, int], dict[int, str]]) -> docs.WrittenFile | None:
-    """Pass 2 for one file: generate, protect, write, self-check. Returns docs input or None."""
+    """Pass 2 for one file: generate, protect, write, self-check. Returns docs input or None.
+
+    A :class:`ColumnRefusal` raised while a table is generated leaves the file out of this attempt; in sharing mode
+    a refused non-key column is requested nulled for the next one (:func:`_request_null_after_refusal`)."""
     assert run.out_dir is not None and fr.layout is not None
+    generating: int | None = None
     dest = run.out_dir / Path(*fr.out_rel_path.split("/"))
     tmp = dest.with_name(dest.name + TMP_SUFFIX)
     try:
@@ -515,6 +538,7 @@ def generate_file(fr: FileResult, settings: Settings, run: RunResult, reg: IdReg
         out_handler = registry.output_handler(fr.format)
         synth: list[SyntheticTable] = []
         for t_i, tp in enumerate(fr.tables):
+            generating = t_i
             ctx = GenContext(run.seed, fr.rel_path, reg, namespaces.get((fr.rel_path, t_i), {}), settings)
             generation_profile = tp
             if settings.mode == "sharing":
@@ -547,6 +571,7 @@ def generate_file(fr: FileResult, settings: Settings, run: RunResult, reg: IdReg
             for m in leaks.scan_table(tp, st):
                 fr.fail(m.text + (f" (column {m.column})" if m.column else ""), m.fix, m.code, m.column)
             synth.append(st)
+        generating = None
         if fr.failed:
             return None
         out_tables = [OutTable(st.name, st.header, [c.values for c in st.columns], [c.index for c in st.columns],
@@ -669,6 +694,12 @@ def generate_file(fr: FileResult, settings: Settings, run: RunResult, reg: IdReg
             for column, text in selfcheck.dtype_drift(src_dt, dt, st.header):
                 fr.messages.append(Message("warning", "dtype_mismatch", text, column=column))
         return docs.WrittenFile(fr, synth, fr.synthetic_stats, dtypes)
+    except ColumnRefusal as e:
+        tmp.unlink(missing_ok=True)
+        if fr.written:
+            dest.unlink(missing_ok=True)
+        _request_null_after_refusal(fr, settings, run, generating, e)
+        fr.fail(e.message, e.fix, e.code, e.column)
     except DatanonymousError as e:
         tmp.unlink(missing_ok=True)
         if fr.written:  # D19: a file that FAILs after its output was moved into place is not written either

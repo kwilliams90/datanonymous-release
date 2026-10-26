@@ -829,10 +829,15 @@ def execute(settings: Settings, input_path: Path, out_dir: Path | None = None, r
     """Sharing writes the verified files to the output folder and leaves out (and lists in the report folder's
     sharing-failures.csv) the ones that cannot be written safely; fidelity retains local workflow."""
     validate(settings)
+    if mode == "run":
+        from . import rundirs
+
+        out_dir, report_dir = rundirs.resolve(settings, Path(input_path), out_dir, report_dir)
+        if out_dir is None:
+            raise UsageError("--out-dir is required",
+                             fix="pass --out-dir, or set output_root and report_root in a config file")
     if settings.mode != "sharing" or mode != "run":
         return _execute(settings, input_path, out_dir, report_dir, mode)
-    if out_dir is None:
-        raise UsageError("--out-dir is required")
     from .privacy import package
 
     destination = Path(out_dir)

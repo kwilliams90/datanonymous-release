@@ -18,6 +18,12 @@ EXAMPLES = REPO / "example-data"
 EXAMPLE_FILES = ("StudentsPerformance.csv", "student-scores.csv", "students_data.csv")
 
 
+@pytest.fixture(autouse=True)
+def _isolated_user_config(tmp_path_factory, monkeypatch):
+    """No test reads a developer's real user config folder: it is an empty folder of the test's own."""
+    monkeypatch.setenv("DATANONYMOUS_CONFIG_DIR", str(tmp_path_factory.mktemp("user-config")))
+
+
 def run_cli(*args: str):
     """Invoke the CLI with explicit fidelity compatibility for legacy tests."""
     argv = [str(a) for a in args]

@@ -226,16 +226,18 @@ def test_a_column_scoped_finding_on_another_column_nulls_it_with_a_plain_reason(
     assert "automatically" in line and "privacy check" in line, line
 
 
-@pytest.mark.parametrize("column", ["Student_ID", "Homeroom"], ids=["key", "dependency"])
-def test_a_column_scoped_finding_on_a_key_or_relationship_column_still_leaves_the_file_out(
-        tmp_path, monkeypatch, column):
-    _finding_on(monkeypatch, column, stubborn=False)
-    original = tmp_path / "original"
-    # Homeroom follows from Locker (a dependency the copy keeps), so nulling either would break it
+def _homeroom_roster(original: Path) -> None:
+    # Homeroom follows from Locker: a dependency inside the table (ADR-0001 amendment: nulling it breaks no join)
     rows = [{"Student_ID": student_id(i), "Locker": ("North", "South", "West")[i % 3],
              "Homeroom": f"R{101 + i % 3}", "Score": f"{(5100 + i * 73) / 100:.2f}"} for i in range(N)]
     _write(original / "roster.csv", rows)
     _scores(original)
+
+
+def test_a_column_scoped_finding_on_a_key_column_still_leaves_the_file_out(tmp_path, monkeypatch):
+    _finding_on(monkeypatch, "Student_ID", stubborn=False)
+    original = tmp_path / "original"
+    _homeroom_roster(original)
     run = execute(Settings(mode="sharing", seed=573291), original, tmp_path / "synthetic", tmp_path / "local-report")
     roster = next(f for f in run.files if f.rel_path == "roster.csv")
     assert not roster.written
@@ -243,6 +245,19 @@ def test_a_column_scoped_finding_on_a_key_or_relationship_column_still_leaves_th
     assert exit_code(run) == 3
     assert (tmp_path / "synthetic" / "scores.csv").is_file()
     assert not (tmp_path / "synthetic" / "roster.csv").exists()
+
+
+def test_a_column_scoped_finding_on_a_dependency_column_nulls_it_and_reports_the_link(tmp_path, monkeypatch):
+    _finding_on(monkeypatch, "Homeroom", stubborn=False)
+    original = tmp_path / "original"
+    _homeroom_roster(original)
+    result, out, report = _cli(original, tmp_path)
+    assert result.exit_code == 0, result.output
+    written = read_records(out / "roster.csv")
+    assert all(row["Homeroom"] == "" and row["Locker"] for row in written)
+    assert "automatically" in _nulled_section(report)["Homeroom"]
+    changed = (report / "REPORT.md").read_text(encoding="utf-8").split("## What changed", 1)[1].split("\n## ", 1)[0]
+    assert "the link between Locker and Homeroom is not kept" in changed, changed
 
 
 def test_a_finding_that_nulling_does_not_clear_leaves_the_file_out(tmp_path, monkeypatch):

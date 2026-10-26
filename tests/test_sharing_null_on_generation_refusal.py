@@ -146,11 +146,11 @@ def _refused_while_generated(monkeypatch, column: str) -> list[str]:
     return rounds
 
 
-@pytest.mark.parametrize("column", ["Student_ID", "Homeroom"], ids=["key", "dependency"])
-def test_the_same_refusal_on_a_key_or_relationship_column_still_leaves_the_file_out(tmp_path, monkeypatch, column):
+def test_the_same_refusal_on_a_key_column_still_leaves_the_file_out(tmp_path, monkeypatch):
+    """A dependency column refused the same way is nulled (ADR-0001 amendment; test_sharing_in_table_links.py)."""
+    column = "Student_ID"
     rounds = _refused_while_generated(monkeypatch, column)
     original = tmp_path / "original"
-    # Homeroom follows from Locker (a dependency the copy keeps), so nulling either would break it
     _write(original / "roster.csv", [{"Student_ID": student_id(i), "Locker": ("North", "South", "West")[i % 3],
                                       "Homeroom": f"R{101 + i % 3}", "Score": f"{(5100 + i * 73) / 100:.2f}"}
                                      for i in range(N)])

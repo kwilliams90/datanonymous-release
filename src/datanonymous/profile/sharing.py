@@ -623,24 +623,47 @@ def _protect_model(p: ColumnProfile, model: ColumnModel, rare: set[str]) -> Colu
                    missing_counts=_rescale(missing, missing_target))
 
 
-def _related_columns(tp: TableProfile, *, composite: bool = True) -> set[int]:
-    """Columns whose source relationship could restore suppressed units."""
+def in_table_links(tp: TableProfile, *, live: bool = True) -> list[tuple[str, int, tuple[int, ...]]]:
+    """The relationships of ``tp`` that stay inside the table (ADR-0001 amendment), as (kind, dependent column,
+    the columns it depends on): ``dependency`` (a functional dependency: the dependent is fixed by one column) and
+    ``template`` (the dependent is built from its inputs). Nulling a column in one breaks no join; only the pattern
+    is lost. ``live``: only the relationships none of whose columns is nulled or excluded, the ones generation would
+    still keep (a column nulled by sharing mode is profiled again as nulled, which finds none of its relationships)."""
+    names = {p.name: p.index for p in tp.columns}
+    out: list[tuple[str, int, tuple[int, ...]]] = []
+    for fd in tp.structure.private.get("fds", ()):
+        if "det" in fd and "dep" in fd:
+            out.append(("dependency", int(fd["dep"]), (int(fd["det"]),)))
+    for entry in tp.structure.private.get("templates", ()):
+        out.append(("template", int(entry["target"]),
+                    tuple(dict.fromkeys(int(part[1]) for part in entry.get("parts", ()) if part[0] == "f"))))
+    for entry in tp.structure.derived_templates:  # found but not applied too: the source pattern is still there
+        if entry.get("column") in names:
+            out.append(("template", names[entry["column"]],
+                        tuple(names[name] for name in entry.get("inputs", ()) if name in names)))
+    seen: set[tuple[str, int, frozenset[int]]] = set()
+    links = []
+    for kind, dependent, inputs in out:
+        key = kind, dependent, frozenset(inputs)
+        if key in seen or (live and any(tp.columns[i].role in ("null", "excluded") for i in (dependent, *inputs))):
+            continue
+        seen.add(key)
+        links.append((kind, dependent, inputs))
+    return links
+
+
+def _related_columns(tp: TableProfile, *, composite: bool = True, in_table: bool = True) -> set[int]:
+    """Columns whose source relationship could restore suppressed units. ``in_table``: with the relationships that
+    stay inside the table (:func:`in_table_links`); without them, the ones nulling a column would break: composite
+    keys and declared rules."""
     names = {p.name: p.index for p in tp.columns}
     involved: set[int] = set()
-    for fd in tp.structure.private.get("fds", ()):
-        involved.update(int(fd[k]) for k in ("det", "dep") if k in fd)
+    if in_table:
+        for _, dependent, inputs in in_table_links(tp):
+            involved.update((dependent, *inputs))
     if composite:
         for key in tp.structure.private.get("composite", ()):
             involved.update(int(i) for i in key.get("cols", ()))
-    for entry in tp.structure.derived_templates:
-        if entry.get("column") in names:
-            involved.add(names[entry["column"]])
-        for name in entry.get("inputs", ()):
-            if name in names:
-                involved.add(names[name])
-    for entry in tp.structure.private.get("templates", ()):
-        involved.add(int(entry["target"]))
-        involved.update(int(part[1]) for part in entry.get("parts", ()) if part[0] == "f")
     for target, entry in tp.structure.private.get("rule_targets", {}).items():
         involved.add(int(target))
         involved.update(int(member[0]) for member in entry.get("members", ()))
@@ -733,12 +756,17 @@ def _trim_params(p: ColumnProfile, rare: set[str]) -> None:
 
 def _structural_contracts(tp: TableProfile, dates: set[int]) -> None:
     sensitive = {p.index for p in tp.columns if p.role == "id" or _invented(p)} | dates
+    dropped = {p.index for p in tp.columns if p.role in ("null", "excluded")}  # their relationships are not kept
     for fd in tp.structure.private.get("fds", ()):
+        if dropped.intersection((fd["det"], fd["dep"])):
+            continue
         if not fd.get("overridden") and sensitive.intersection((fd["det"], fd["dep"])):
             _refuse(tp.columns[fd["dep"]], "has a source person dependency that cannot preserve fictional relationships", _TIED, "sharing_person_dependency")
     # A template's source grouping carries the original distinct/frequency
     # relationship even after its input labels become fictional.
     for template in tp.structure.private.get("templates", ()):
+        if dropped.intersection({template["target"]} | {part[1] for part in template.get("parts", ()) if part[0] == "f"}):
+            continue
         if template.get("groups") or sensitive.intersection(
                 {template["target"]} | {part[1] for part in template.get("parts", ()) if part[0] == "f"}):
             _refuse(tp.columns[template["target"]], "has a source template relationship that cannot be safely regenerated", _TIED, "sharing_source_template")
@@ -932,8 +960,10 @@ AUTO_NULL_ALTERNATIVE_KEY = "_null_alternative"
 
 def key_or_related(tp: TableProfile, index: int) -> bool:
     """A key (ID column, alias, nesting, a column holding another ID column's keys) or a column in a structural
-    relationship (join, dependency, template, composite key, declared rule): nulling it would break what the
-    synthetic copy exists to keep, so its refusal still leaves the file out (ADR-0001)."""
+    relationship that reaches past its own values (join, composite key, declared rule): nulling it would break what the
+    synthetic copy exists to keep, so its refusal still leaves the file out (ADR-0001). A relationship that stays inside
+    the table (:func:`in_table_links`: a dependency, a template) does not make a column one: nulling it breaks no join,
+    it only loses the pattern (ADR-0001 amendment, :func:`lost_links`)."""
     from .entity import FLAGGED_ID_KEY
 
     p = tp.columns[index]
@@ -946,7 +976,7 @@ def key_or_related(tp: TableProfile, index: int) -> bool:
         return True
     if any(p.params.get(key) for key in ("_key_ref", "_key_ref_list", FLAGGED_ID_KEY)):
         return True
-    return index in _related_columns(tp)
+    return index in _related_columns(tp, in_table=False)
 
 
 def catalogue_fix(code: str | None) -> str | None:
@@ -985,7 +1015,8 @@ def null_column(tp: TableProfile, index: int, reason: str, *, automatic: bool = 
     new.flags["nulled_automatically"] = automatic
     if automatic:
         # an ID-like column (D7 candidate) may be an ID the operator can declare instead (ADR-0001)
-        mark_auto_nulled(new, reason, _id_alternative(old.name) if old.params.get("id_candidate") else alternative)
+        mark_auto_nulled(new, reason, _id_alternative(old.name) if old.params.get("id_candidate") else alternative,
+                         lost_links(tp, index))
     tp.columns[index] = new
     if old.params.get("id_candidate") and not any(p.params.get("id_candidate") for p in tp.columns):
         # the table's ID-like candidates (D7) were all nulled: none of their real values is written any more
@@ -1000,10 +1031,48 @@ def null_column(tp: TableProfile, index: int, reason: str, *, automatic: bool = 
     return new
 
 
-def mark_auto_nulled(p: ColumnProfile, reason: str, alternative: str | None = None) -> None:
+def _names(names: list[str]) -> str:
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+
+
+def lost_links(tp: TableProfile, index: int) -> tuple[str, ...]:
+    """The plain text of each relationship inside ``tp`` (:func:`in_table_links`) that is no longer kept once column
+    ``index`` is nulled, for "What changed" (ADR-0001 amendment)."""
+    names = [p.name for p in tp.columns]
+    out = []
+    for kind, dependent, inputs in in_table_links(tp, live=False):
+        if index != dependent and index not in inputs:
+            continue
+        if kind == "dependency":
+            out.append(f"the link between {names[inputs[0]]} and {names[dependent]} is not kept")
+        else:
+            out.append(f"{names[dependent]} is no longer built from {_names([names[i] for i in inputs])}")
+    return tuple(dict.fromkeys(out))
+
+
+def with_lost_links(tp: TableProfile, index: int, request: tuple) -> tuple:
+    """A null request (plain reason, alternative) for column ``index`` of ``tp``, with the relationships nulling it
+    loses (:func:`lost_links`) as its third item; a column nulled already keeps the ones it recorded."""
+    reason, alternative = request[0], request[1] if len(request) > 1 else None
+    recorded = tp.columns[index].params.get(LOST_LINKS_KEY)
+    return reason, alternative, tuple(recorded) if recorded is not None else lost_links(tp, index)
+
+
+#: catalogue ``change`` code: a relationship inside the table is not kept because one of its columns was nulled
+LINK_NOT_KEPT_CODE = "link_not_kept"
+#: ``ColumnProfile.params`` key (PRIVATE) of the relationships a column nulled by sharing mode lost
+LOST_LINKS_KEY = "_lost_links"
+
+
+def mark_auto_nulled(p: ColumnProfile, reason: str, alternative: str | None = None,
+                     links: tuple[str, ...] = ()) -> None:
     """Label the Nulled column ``p`` as nulled by sharing mode (ADR-0001), not by the operator: its source, its plain
     ``reason``, and the utility warning that reports it. ``alternative`` is what the operator can do instead to keep
-    the column (for an ID-like column: declare it as an ID), shown with it in the report."""
+    the column (for an ID-like column: declare it as an ID), shown with it in the report. ``links``: the plain text
+    of each relationship inside the table that nulling it lost (:func:`lost_links`), reported as a change."""
+    p.params[LOST_LINKS_KEY] = tuple(links)
+    for text in links:
+        p.messages.append(Message("info", LINK_NOT_KEPT_CODE, text, column=p.name))
     p.source = AUTO_NULL_SOURCE
     p.reason = f"nulled automatically: written as all-missing because {reason}"
     p.flags["nulled_automatically"] = True
@@ -1146,9 +1215,34 @@ def change_records(protected: TableProfile) -> list[tuple[str, str, int]]:
     return out
 
 
+#: refusals raised because a column is in a structural relationship (not because of its own values alone)
+_IN_STRUCTURE_CODES = frozenset({"sharing_rare_in_structure", "sharing_numeric_structure", "sharing_date_structure",
+                                 "sharing_person_dependency", "sharing_source_template"})
+
+
+def _nullable_dependents(tp: TableProfile, index: int) -> list[int]:
+    """The columns that depend on column ``index`` through a live relationship inside the table (the dependent of a
+    dependency it fixes, a column a template builds from it) and that may be nulled: not keys, not in a relationship
+    nulling would break."""
+    found = dict.fromkeys(dependent for _, dependent, inputs in in_table_links(tp) if index in inputs)
+    return [d for d in found if d != index and not key_or_related(tp, d)]
+
+
+def _link_partners(tp: TableProfile, index: int) -> list[str]:
+    """The names of the other columns of the live relationships inside the table that column ``index`` is in."""
+    partners = [i for _, dependent, inputs in in_table_links(tp) if index == dependent or index in inputs
+                for i in (dependent, *inputs) if i != index]
+    return [tp.columns[i].name for i in dict.fromkeys(partners)]
+
+
 def null_unprotectable_columns(tp: TableProfile, settings: Any) -> list[str]:
     """ADR-0001: null every column whose protection refuses (:class:`ColumnRefusal`) and that is not a key or in a
     structural relationship, until the table's profile can be protected. Returns the nulled columns' names.
+
+    A relationship inside the table (a dependency, a template) does not stop it (ADR-0001 amendment). When a column is
+    refused because of such a relationship, the side that depends on it is nulled instead (the dependent of a
+    dependency, the column a template builds), when it is nullable: the relationship goes, and the column itself is
+    protected like any other. The relationships nulling loses are reported (:func:`lost_links`).
 
     A refusal on a key or relationship column, or any other error, stops here: the file is left out when it is
     generated, with today's reason."""
@@ -1160,7 +1254,18 @@ def null_unprotectable_columns(tp: TableProfile, settings: Any) -> list[str]:
             i = refusal.index
             if not (0 <= i < len(tp.columns)) or tp.columns[i].role in ("null", "excluded") or key_or_related(tp, i):
                 return nulled
-            null_column(tp, i, refusal.plain, automatic=True, alternative=catalogue_fix(refusal.code))
+            dependents = _nullable_dependents(tp, i) if refusal.code in _IN_STRUCTURE_CODES else []
+            for d in dependents:
+                null_column(tp, d, f"keeping its link with {tp.columns[i].name} could expose values of "
+                                   f"{tp.columns[i].name} that cannot be shared safely",
+                            automatic=True, alternative=None)
+                nulled.append(tp.columns[d].name)
+            if dependents:
+                continue
+            partners = _link_partners(tp, i) if refusal.code in _IN_STRUCTURE_CODES else []
+            reason = (f"it is tied to {_names(partners)} by a link inside the table that cannot be kept safely"
+                      if partners else refusal.plain)
+            null_column(tp, i, reason, automatic=True, alternative=catalogue_fix(refusal.code))
             nulled.append(tp.columns[i].name)
         except Exception:  # noqa: BLE001 - generation reports it for the file (D19)
             return nulled
@@ -1169,4 +1274,5 @@ def null_unprotectable_columns(tp: TableProfile, settings: Any) -> list[str]:
 
 
 __all__ = ["record_evidence", "protect_profile", "ROWS_AS_PEOPLE_CODE", "verify_values", "null_column", "null_unprotectable_columns",
-           "mark_auto_nulled", "column_scoped_findings", "AUTO_NULL_CODE", "AUTO_NULL_ALTERNATIVE_KEY", "AUTO_NULL_SOURCE", "EVIDENCE_KEY", "SOURCE_MODEL_KEY", "SUPPRESSED_KEY", "PERSON_DATE_KEY", "LOOKUP_KEY", "CHANGES_KEY", "change_records"]
+           "mark_auto_nulled", "column_scoped_findings", "AUTO_NULL_CODE", "AUTO_NULL_ALTERNATIVE_KEY", "AUTO_NULL_SOURCE", "EVIDENCE_KEY", "SOURCE_MODEL_KEY", "SUPPRESSED_KEY", "PERSON_DATE_KEY", "LOOKUP_KEY", "CHANGES_KEY", "change_records",
+           "in_table_links", "lost_links", "with_lost_links", "LINK_NOT_KEPT_CODE", "LOST_LINKS_KEY"]

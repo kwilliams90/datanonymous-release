@@ -164,13 +164,19 @@ def test_a_column_in_a_declared_rule_still_leaves_the_file_out_with_todays_reaso
     assert reasons == _reasons(tmp_path / "refuse", original, rules=rules, refuse_unsupported=True)
 
 
-def test_a_column_in_a_dependency_still_leaves_the_file_out(tmp_path):
-    original, out, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
-    _roster(original, "Homeroom_Color", {"Homeroom": lambda i: f"R{101 + i % 8}"})
-    run = execute(Settings(mode="sharing", seed=573291), original, out, report)
-    roster = next(f for f in run.files if f.rel_path == "roster.csv")
-    assert not roster.written, [p.name for tp in roster.tables for p in tp.columns if p.role == "null"]
-    assert any("structural key, dependency or rule" in r for r in roster.reasons), roster.reasons
+def test_a_column_in_a_dependency_inside_its_table_is_nulled_and_the_link_reported(tmp_path):
+    """ADR-0001 amendment: a dependency inside the table no longer stops nulling (keys, joins and declared rules do,
+    test_sharing_in_table_links.py); the report says which link is not kept."""
+    original = tmp_path / "original"
+    source = _roster(original, "Homeroom_Color", {"Homeroom": lambda i: f"R{101 + i % 8}"})
+    result, out, report = _cli(original, tmp_path)
+    assert result.exit_code == 0, result.output
+    written = read_records(out / "roster.csv")
+    assert len(written) == N and all(row["Homeroom_Color"] == "" and row["Score"] for row in written)
+    assert not ({row["Homeroom_Color"] for row in source} | {row["Homeroom"] for row in source}) & _cells(out)
+    md = (report / "REPORT.md").read_text(encoding="utf-8")
+    changed = md.split("\n## What changed\n", 1)[1].split("\n## ", 1)[0]
+    assert "link between" in changed and "Homeroom_Color" in changed and "is not kept" in changed, changed
 
 
 def test_the_report_tells_operator_nulls_from_automatic_ones(tmp_path):

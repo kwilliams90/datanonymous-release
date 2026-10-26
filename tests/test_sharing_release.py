@@ -601,8 +601,21 @@ def test_skipped_inputs_are_logged_and_do_not_block(tmp_path):
     assert exit_code(run) == 0
     assert set(hash_inventory(output)) == {*corpus_rows(), *DOCS}
     assert [(r["input_path"], r["outcome"]) for r in _failures(report)] == [("notes.docx", "skipped")]
-    assert f"1 of {len(corpus_rows()) + 1} input files were not written" in (output / "README.md").read_text(
-        encoding="utf-8")
+    assert "were not written" not in (output / "README.md").read_text(encoding="utf-8")
+
+
+def test_an_actionable_skip_still_counts_in_the_readme_but_routine_ones_beside_it_do_not(tmp_path):
+    original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
+    write_corpus(original)
+    (original / "survey.sav").write_bytes(b"invented survey")  # a table format this release does not read
+    (original / "notes.docx").write_bytes(b"invented notes")  # routine: not a table at all
+    run = execute(Settings(mode="sharing", seed=573291), original, output, report)
+    assert run.package["released"], _diagnostic(run)
+    assert set(hash_inventory(output)) == {*corpus_rows(), *DOCS}
+    assert sorted((r["input_path"], r["outcome"]) for r in _failures(report)) == [
+        ("notes.docx", "skipped"), ("survey.sav", "skipped")]
+    readme = (output / "README.md").read_text(encoding="utf-8")
+    assert f"1 of {len(corpus_rows()) + 1} input files were not written" in readme
 
 
 def test_a_complete_run_logs_no_failures_and_says_nothing_was_left_out(canonical_release):
@@ -669,3 +682,34 @@ def test_saturated_categorical_only_tables_are_still_refused(tmp_path):
     assert not refused & set(hash_inventory(output))
     assert refused <= {r["input_path"] for r in _failures(report)}
     assert exit_code(run) == 3
+
+
+def test_a_routine_skip_alone_prints_no_were_not_written_line_but_is_still_logged(tmp_path):
+    original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
+    write_corpus(original)
+    (original / "notes.docx").write_bytes(b"invented notes")
+    result = _cli(original, "--out-dir", output, "--report-dir", report, "--seed", "573291")
+    assert result.exit_code == 0, result.output
+    assert "were not written" not in result.output and "sharing-failures.csv" not in result.output
+    assert [(r["input_path"], r["outcome"]) for r in _failures(report)] == [("notes.docx", "skipped")]
+
+
+def test_a_deselected_skip_prints_no_were_not_written_line(tmp_path):
+    original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
+    write_corpus(original)
+    (original / "broken.xlsx").write_bytes(b"invented invalid workbook")
+    result = _cli(original, "--out-dir", output, "--report-dir", report, "--seed", "573291",
+                  "--exclude-path", "broken.xlsx")
+    assert result.exit_code == 0, result.output
+    assert "were not written" not in result.output and "sharing-failures.csv" not in result.output
+
+
+def test_the_were_not_written_count_leaves_out_routine_skips(tmp_path):
+    original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
+    write_corpus(original)
+    (original / "broken.xlsx").write_bytes(b"invented invalid workbook")
+    (original / "notes.docx").write_bytes(b"invented notes")
+    result = _cli(original, "--out-dir", output, "--report-dir", report, "--seed", "573291")
+    assert result.exit_code == 3, result.output
+    assert "1 input file(s) were not written to the output folder" in result.output
+    assert "2 input file(s)" not in result.output

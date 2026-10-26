@@ -26,11 +26,16 @@ def _plural(n: int, one: str, many: str) -> str:
     return one if n == 1 else many
 
 
-def _record_text(kind: str, count: int, counts: bool) -> str:
+def _record_text(kind: str, count: int, counts: bool, numeric: bool = False) -> str:
     if kind == "dates":
         return "dates shifted; month patterns kept"
     if kind == "numeric":
         return "numeric extremes removed"
+    if kind == "categories" and numeric:
+        # a number column's rare values are numbers, not categories
+        if not counts:
+            return "rare values replaced with common ones"
+        return f"{count} {_plural(count, 'rare value', 'rare values')} replaced with common ones"
     what = "rare categories" if kind == "categories" else "rare missing-value spellings"
     if not counts:
         return f"{what} merged into common ones"
@@ -40,12 +45,14 @@ def _record_text(kind: str, count: int, counts: bool) -> str:
 
 def file_changes(fr: FileResult, counts: bool = True) -> list[tuple[str | None, str]]:
     """(column or None, plain text) of every deliberate change made to ``fr``, each listed once."""
+    from ..generate import sharing_numeric
     from ..profile.sharing import AUTO_NULL_SOURCE, CHANGES_KEY, LINK_NOT_KEPT_CODE, TEMPLATE_REBUILT_CODE
 
     out: list[tuple[str | None, str]] = []
     for tp in fr.tables:
+        numeric = {p.name for p in tp.columns if p.type in sharing_numeric.TYPES}
         for column, kind, count in tp.private.extra.get(CHANGES_KEY) or ():
-            out.append((column, _record_text(kind, count, counts)))
+            out.append((column, _record_text(kind, count, counts, numeric=column in numeric)))
         for p in tp.columns:
             if p.role == "excluded":
                 # the shareable README must not name it: the operator left it out, so its header is not for recipients

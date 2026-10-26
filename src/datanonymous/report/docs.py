@@ -455,9 +455,13 @@ def write_docs(out_dir: Path, written: list[WrittenFile], run_messages: list[Mes
 
 
 def not_written_count(run: Any) -> tuple[int, int]:
-    """(input files not written, input files found): every FAILed file and every skipped file of the run."""
-    skipped = len(getattr(run, "skipped", ()))  # an older run object may have none
-    return (sum(1 for fr in run.files if fr.failed) + skipped, len(run.files) + skipped)
+    """(input files not written, input files found): every FAILed file and every actionable skipped file of the run.
+
+    Routine (non-table) and deselected skips are not left out of the output on a problem, so they are not counted
+    (the same rule as the console line); they still count as found only when actionable."""
+    skipped = list(getattr(run, "skipped", ()))  # an older run object may have none
+    actionable = sum(1 for s in skipped if not (getattr(s, "routine", False) or getattr(s, "deselected", False)))
+    return (sum(1 for fr in run.files if fr.failed) + actionable, len(run.files) + actionable)
 
 
 def rewrite_docs(run: Any, min_cell: int) -> dict[str, str]:

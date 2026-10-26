@@ -1433,7 +1433,9 @@ def console_summary(run: RunResult) -> list[str]:
         lines.append(f"Out dir: {run.out_dir}")
     if run.report_dir is not None:
         lines.append(f"Report: {run.report_dir / 'REPORT.md'}")
-        not_written = sum(1 for fr in run.files if fr.failed) + len(run.skipped)
+        # routine (non-table) and deselected skips are not left out of the output folder on a problem: not counted
+        not_written = (sum(1 for fr in run.files if fr.failed)
+                       + sum(1 for s in run.skipped if skip_kind(s) == "actionable"))
         if run.data_mode == "sharing" and not_written:
             lines.append(f"{not_written} input file(s) were not written to the output folder; "
                          f"see {run.report_dir / FAILURES_CSV}")

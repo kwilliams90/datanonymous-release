@@ -53,11 +53,13 @@ def _reachable_codes() -> tuple[set[str], set[str]]:
                     for code in _strings(call.args[1]):
                         if finding_category(Message(level, code, "")) == "blocking":
                             blocking.add(code)
-            # a failure code is a ``code=`` keyword, or the third argument of fail() / _refuse()
+            # a failure code is a ``code=`` keyword, or the third argument of fail() / the fourth of _refuse(p, reason, plain, code)
             failures.update(c for kw in call.keywords if kw.arg == "code" for c in _strings(kw.value))
             method = isinstance(call.func, ast.Attribute)
-            if (name == "fail" and method or name == "_refuse") and len(call.args) >= 3:
+            if name == "fail" and method and len(call.args) >= 3:
                 failures.update(_strings(call.args[2]))
+            if name == "_refuse" and len(call.args) >= 4:
+                failures.update(_strings(call.args[3]))
     return blocking, failures
 
 
@@ -121,7 +123,7 @@ def _blocked_roster_run(tmp_path, column="Parent_Education", value_sets=("Gradua
 
 def test_a_refused_column_is_explained_in_plain_words_with_its_code_kept(tmp_path):
     original, output, report = _blocked_roster_run(tmp_path)
-    run = execute(Settings(mode="sharing", seed=573291), original, output, report)
+    run = execute(Settings(mode="sharing", seed=573291, refuse_unsupported=True), original, output, report)
     assert not run.package["released"]
     text = (report / "REPORT.md").read_text(encoding="utf-8")
     assert "This column describes a parent or teacher, not the student, so it can't be shared safely" in text
@@ -136,7 +138,7 @@ def test_a_refused_column_is_explained_in_plain_words_with_its_code_kept(tmp_pat
 def test_failure_log_and_console_use_the_plain_sentence(tmp_path):
     original, output, report = _blocked_roster_run(tmp_path)
     result = CliRunner().invoke(main, [str(original), "--out-dir", str(output), "--report-dir", str(report),
-                                       "--seed", "573291"], catch_exceptions=False)
+                                       "--seed", "573291", "--refuse-unsupported"], catch_exceptions=False)
     assert result.exit_code == 3, result.output
     assert "can't be shared safely" in result.output
     assert "intrinsic attribute" not in result.output
@@ -147,7 +149,7 @@ def test_failure_log_and_console_use_the_plain_sentence(tmp_path):
 
 def test_sharing_reports_never_suggest_an_option_sharing_refuses(tmp_path):
     original, output, report = _blocked_roster_run(tmp_path)
-    execute(Settings(mode="sharing", seed=573291), original, output, report)
+    execute(Settings(mode="sharing", seed=573291, refuse_unsupported=True), original, output, report)
     shown = [p for p in report.rglob("*.md")] + [report / "sharing-failures.csv"]
     assert shown
     for path in shown:
@@ -162,7 +164,7 @@ def test_a_blocking_warning_is_shown_as_a_plain_sentence_and_fix_with_its_code(t
     write_corpus(original)
     lines = (original / "iep.csv").read_text(encoding="utf-8").splitlines(keepends=True)
     (original / "iep.csv").write_text("".join(lines[:5]) + "\n" + "".join(lines[5:]), encoding="utf-8")
-    run = execute(Settings(mode="sharing", seed=573291), original, output, report)
+    run = execute(Settings(mode="sharing", seed=573291, refuse_unsupported=True), original, output, report)
     assert not (output / "iep.csv").exists() and (output / "roster.csv").exists()
     assert {f.rel_path for f in run.files if f.failed} == {"iep.csv"}
     text = (report / "REPORT.md").read_text(encoding="utf-8")

@@ -95,6 +95,7 @@ _SCALARS = (
     "mode",
     "factor_max", "decimal", "no_default_ids", "min_cell", "encoding", "delimiter", "sheet",
     "header_row", "seed", "force", "max_row_matches", "no_strict", "id_check", "keep_titles", "all_or_nothing",
+    "refuse_unsupported",
 )
 _CONFIG_ONLY = ("rules", "structure")
 #: Options that decide what a column IS (one of them wins, ``detect/types.py``). A CLI option of this
@@ -161,6 +162,9 @@ class Settings:
     #: sharing mode: write nothing unless every input file is written (the default leaves out only the files
     #: that cannot be written safely and lists them in the report folder's sharing-failures.csv)
     all_or_nothing: bool = False
+    #: sharing mode: leave a file out when one of its non-key columns cannot be protected (the default writes that
+    #: column as a Nulled column, ADR-0001)
+    refuse_unsupported: bool = False
     verbosity: int = 0
     json_output: bool = False
     # config-only
@@ -420,7 +424,7 @@ def validate(s: Settings) -> None:
         except ValueError:
             names = ", ".join(ct.value for ct in ColumnType)
             raise UsageError(f"--force-type {ref.raw}={t}: unknown type; use one of {names}") from None
-    for b in ("no_default_ids", "force", "no_strict", "keep_titles", "all_or_nothing"):
+    for b in ("no_default_ids", "force", "no_strict", "keep_titles", "all_or_nothing", "refuse_unsupported"):
         setattr(s, b, bool(getattr(s, b)))
     from .detect.text import PII_SUBTYPES  # lazy: detect imports config
 

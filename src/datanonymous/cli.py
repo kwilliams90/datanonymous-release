@@ -197,6 +197,9 @@ def main() -> None:
 @click.option("--all-or-nothing", "all_or_nothing", is_flag=True, default=False,
               help="Sharing mode: write nothing unless every input file can be written (default: leave out the "
                    "files that cannot and list them in <report-dir>/sharing-failures.csv).")
+@click.option("--refuse-unsupported", "refuse_unsupported", is_flag=True, default=False,
+              help="Sharing mode: leave a file out when one of its non-key columns cannot be protected (default: "
+                   "write that column with every cell empty and list it in the report).")
 @click.option("--max-row-matches", type=click.FloatRange(0, 100), default=None, metavar="PCT",
               help="Fail a file whose remaining chance row matches exceed PCT percent.")
 @click.option("--no-strict", is_flag=True, default=False, help="Layout self-check differences only warn.")

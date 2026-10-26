@@ -294,7 +294,8 @@ def _roster_and_services(original: Path) -> None:
 def test_a_roster_failing_after_planning_does_not_keep_its_row_numbers(tmp_path):
     original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
     _roster_and_services(original)
-    run = execute(Settings(mode="sharing", seed=573291), original, output, report)
+    # --refuse-unsupported: Parent_Name fails the roster instead of being nulled (ADR-0001)
+    run = execute(Settings(mode="sharing", seed=573291, refuse_unsupported=True), original, output, report)
     assert run.package["released"], _diagnostic(run)
     roster = next(f for f in run.files if f.rel_path == "roster.csv")
     assert not roster.written and any("Parent_Name" in r for r in roster.reasons)
@@ -376,7 +377,7 @@ def test_a_population_refusal_that_names_no_table_withholds_every_table(tmp_path
     assert all("invented run-level refusal" in r["reason"] for r in _failures(report))
 
 
-@pytest.mark.parametrize("column,actors", [
+INTRINSIC_ACTOR_ATTRIBUTES = pytest.mark.parametrize("column,actors", [
     ("Parent_Name", ["Clara O'Baxen", "Daria D'Buxen", "Elena D'Bixen"]),
     ("Guardian_Email", ["baaan@first.test", "babcn@other.test", "bacdn@other.test"]),
     ("Teacher_Name", ["Clara O'Baxen", "Daria D'Buxen", "Elena D'Bixen"]),
@@ -388,8 +389,9 @@ def test_a_population_refusal_that_names_no_table_withholds_every_table(tmp_path
     ("Teacher_Comments", ["Contact baaan@first.test", "Contact babcn@other.test", "Contact bacdn@other.test"]),
     ("Parent_Notes", ["Call 212-555-0101", "Call 312-555-0102", "Call 312-555-0103"]),
 ])
-def test_intrinsic_actor_attributes_with_many_students_withhold_the_whole_release(tmp_path, column, actors):
-    original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
+
+
+def _actor_roster(original: Path, column: str, actors: list[str]) -> list[dict[str, str]]:
     original.mkdir()
     rows = [{"Student_ID": student_id(i), column: actors[i // 20],
              "Score": f"{(5100 + i * 73) / 100:.2f}",
@@ -401,10 +403,31 @@ def test_intrinsic_actor_attributes_with_many_students_withhold_the_whole_releas
     # Each source actor reaches twenty students, yet the O' name/domain or
     # attribute value can still have exactly one statistical donor (D49).
     assert set(Counter(row[column] for row in rows).values()) == {20}
-    run = execute(Settings(mode="sharing", seed=573291), original, output, report)
+    return rows
+
+
+@INTRINSIC_ACTOR_ATTRIBUTES
+def test_intrinsic_actor_attributes_with_many_students_withhold_the_whole_release(tmp_path, column, actors):
+    # --refuse-unsupported: the old whole-file refusal (ADR-0001)
+    original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
+    _actor_roster(original, column, actors)
+    run = execute(Settings(mode="sharing", seed=573291, refuse_unsupported=True), original, output, report)
     assert not run.package["released"] and not output.exists()
     assert all(not f.written for f in run.files)
     assert any("intrinsic attribute of another person" in m.text for m in blocking_findings(run)), _diagnostic(run)
+
+
+@INTRINSIC_ACTOR_ATTRIBUTES
+def test_intrinsic_actor_attributes_are_nulled_and_appear_nowhere_in_the_output(tmp_path, column, actors):
+    # ADR-0001: by default the column is nulled and the file written
+    original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
+    _actor_roster(original, column, actors)
+    run = execute(Settings(mode="sharing", seed=573291), original, output, report)
+    assert run.package["released"] and exit_code(run) == 0, _diagnostic(run)
+    written = read_records(output / "roster.csv")
+    assert len(written) == 60 and all(row[column] == "" for row in written)
+    text = "\n".join(path.read_text(encoding="utf-8") for path in output.rglob("*") if path.is_file())
+    assert not [actor for actor in actors if actor in text]
 
 
 def test_explicit_staff_person_id_does_not_claim_an_unimplemented_actor_ownership_contract(tmp_path):
@@ -417,7 +440,7 @@ def test_explicit_staff_person_id_does_not_claim_an_unimplemented_actor_ownershi
         writer = csv.DictWriter(stream, fieldnames=list(rows[0]), lineterminator="\n")
         writer.writeheader()
         writer.writerows(rows)
-    settings = Settings(mode="sharing", seed=573291, person_id=[ColumnRef("Staff_ID")])
+    settings = Settings(mode="sharing", seed=573291, person_id=[ColumnRef("Staff_ID")], refuse_unsupported=True)
     run = execute(settings, original, output, tmp_path / "local-report")
     assert not run.package["released"] and not output.exists()
     assert any("support for that actor" in m.text for m in blocking_findings(run)), _diagnostic(run)

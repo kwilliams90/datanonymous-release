@@ -144,7 +144,7 @@ def _settings(kw: dict[str, Any]):  # noqa: ANN202
 
 def config_lines(settings: Any) -> list[str]:
     """Which config file(s) the run loaded, so standing settings are never invisible."""
-    return [f"Config loaded: {f}" for f in settings.config_files]
+    return [_screened(f"Config loaded: {f}") for f in settings.config_files]
 
 
 def _screened(text: str) -> str:

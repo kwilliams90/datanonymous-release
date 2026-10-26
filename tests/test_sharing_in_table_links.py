@@ -154,11 +154,13 @@ def _template_roster(original: Path, **extra) -> list[dict[str, str]]:
     return rows
 
 
-def test_a_template_column_is_nulled_and_the_link_reported(tmp_path):
-    """Student_Email is built from First_Name, Last_Name and Student_ID. A template over person names keeps
-    the source's grouping, so sharing mode refuses it; the column the template builds is nulled."""
+def test_a_template_column_that_cannot_be_rebuilt_safely_is_nulled_and_the_link_reported(tmp_path):
+    """Student_Email is built from First_Name, Last_Name and free digits whose lengths are the source's: sharing mode
+    cannot rebuild it from fictional values alone (issue #30), so the column the template builds is nulled. A
+    template it can rebuild safely is written instead: tests/test_sharing_template_rebuild.py."""
     original = tmp_path / "original"
-    source = _template_roster(original)
+    source = _template_roster(original, Student_Email=lambda i: f"{FIRST[i % 6].lower()}{LAST[i % 5].lower()}"
+                                                                f"{(i * 37) % 1000}@example.org")
     result, out, report = _cli(original, tmp_path)
     assert result.exit_code == 0, result.output
     written = read_records(out / "roster.csv")

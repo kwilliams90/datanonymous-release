@@ -26,5 +26,6 @@ Thumbs.db
 # design notes stay local (repo = code, examples, usage docs, agent skills config)
 docs/*
 !docs/agents/
+!docs/adr/
 AGENTS.md
 .claude/

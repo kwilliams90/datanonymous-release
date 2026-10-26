@@ -1055,6 +1055,38 @@ def column_scoped_findings(fr: Any, finding_category: Any) -> dict[int, dict[int
     return out
 
 
+#: ``TablePrivate.extra`` key: the deliberate changes protection made to each column (see :func:`change_records`)
+CHANGES_KEY = "sharing_changes"
+
+
+def change_records(protected: TableProfile) -> list[tuple[str, str, int]]:
+    """(column name, kind, count) of each deliberate change :func:`protect_profile` made, for "What changed".
+
+    Kinds: ``dates`` (a person date was shifted), ``categories`` (rare categories merged into common ones; count =
+    categories), ``blanks`` (rare missing-value spellings merged; count = spellings) and ``numeric`` (rare numeric
+    extremes removed). Read from the protected copy, because the source profile carries none of this."""
+    out: list[tuple[str, str, int]] = []
+    for p in protected.columns:
+        if p.role in ("excluded", "null"):
+            continue
+        if p.params.get(PERSON_DATE_KEY):
+            out.append((p.name, "dates", 0))
+        elif p.flags.get("sharing_rare_units_suppressed") and p.model is not None:
+            units = p.model.extra.get(SUPPRESSED_KEY, ())
+            # a unit is "u:" (a level), "n:" (a number), "c:" (a multi-select combination), "m:" (a missing spelling) or
+            # "v:" (the exact spelling of one of those, not a second thing)
+            categories = (sum(1 for u in units if u[:2] in ("u:", "n:"))
+                          or sum(1 for u in units if u.startswith("c:")))
+            blanks = sum(1 for u in units if u.startswith("m:"))
+            if categories:
+                out.append((p.name, "categories", categories))
+            if blanks:
+                out.append((p.name, "blanks", blanks))
+        if p.flags.get("sharing_numeric_extremes_removed"):
+            out.append((p.name, "numeric", 0))
+    return out
+
+
 def null_unprotectable_columns(tp: TableProfile, settings: Any) -> list[str]:
     """ADR-0001: null every column whose protection refuses (:class:`ColumnRefusal`) and that is not a key or in a
     structural relationship, until the table's profile can be protected. Returns the nulled columns' names.
@@ -1078,4 +1110,4 @@ def null_unprotectable_columns(tp: TableProfile, settings: Any) -> list[str]:
 
 
 __all__ = ["record_evidence", "protect_profile", "verify_values", "null_column", "null_unprotectable_columns",
-           "mark_auto_nulled", "column_scoped_findings", "AUTO_NULL_CODE", "AUTO_NULL_ALTERNATIVE_KEY", "AUTO_NULL_SOURCE", "EVIDENCE_KEY", "SOURCE_MODEL_KEY", "SUPPRESSED_KEY", "PERSON_DATE_KEY", "LOOKUP_KEY"]
+           "mark_auto_nulled", "column_scoped_findings", "AUTO_NULL_CODE", "AUTO_NULL_ALTERNATIVE_KEY", "AUTO_NULL_SOURCE", "EVIDENCE_KEY", "SOURCE_MODEL_KEY", "SUPPRESSED_KEY", "PERSON_DATE_KEY", "LOOKUP_KEY", "CHANGES_KEY", "change_records"]

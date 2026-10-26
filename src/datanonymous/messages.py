@@ -163,8 +163,7 @@ change("column_nulled_automatically",
        "A column that could not be shared safely was written with every cell empty, so none of its real values are released.")
 change("id_format_normalised",
        "IDs in a rare format were written in the column's most common format, so no rare ID format is released.")
-problem("id_width_changed", "The IDs in the shared copy have a different length from the real ones.",
-        "No action is needed unless you need the original length; then leave the column out with `--exclude`.")
+change("id_width_changed", "IDs were written with a different length from the real ones, so they cannot be real IDs.")
 problem("composite_key_duplicates", "Some rows repeat a combination of columns that is meant to be unique.",
         "Check the key columns in the source, or leave one of them out with `--exclude`.")
 problem("excel_scientific_ids", "Long ID numbers were shown by Excel in scientific notation, so digits were already lost.",

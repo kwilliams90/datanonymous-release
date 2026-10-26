@@ -518,9 +518,10 @@ def generate_file(fr: FileResult, settings: Settings, run: RunResult, reg: IdReg
             ctx = GenContext(run.seed, fr.rel_path, reg, namespaces.get((fr.rel_path, t_i), {}), settings)
             generation_profile = tp
             if settings.mode == "sharing":
-                from .profile.sharing import protect_profile
+                from .profile.sharing import CHANGES_KEY, change_records, protect_profile
 
                 generation_profile = protect_profile(tp, settings)
+                tp.private.extra[CHANGES_KEY] = change_records(generation_profile)
                 # the deliberate changes protection made (ADR-0004 broader classes) are reported with the table
                 tp.messages.extend(m for m in generation_profile.messages[len(tp.messages):]
                                    if m.level == "info" and m not in tp.messages)

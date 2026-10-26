@@ -175,14 +175,32 @@ def test_a_column_in_a_dependency_still_leaves_the_file_out(tmp_path):
 
 def test_the_report_tells_operator_nulls_from_automatic_ones(tmp_path):
     original = tmp_path / "original"
-    _roster(original, "Parental_Education_Level")
-    result, out, report = _cli(original, tmp_path, "--null", "Other_Score")
+    # an operator-nulled column of its own: Score and Other_Score stay, so no written row can equal a real one
+    _roster(original, "Parental_Education_Level", {"Third_Score": lambda i: f"{(3000 + (i * 211) % 2999) / 100:.2f}"})
+    result, out, report = _cli(original, tmp_path, "--null", "Third_Score")
     assert result.exit_code == 0, result.output
-    assert all(row["Other_Score"] == "" and row["Parental_Education_Level"] == ""
+    assert all(row["Third_Score"] == "" and row["Parental_Education_Level"] == ""
                for row in read_records(out / "roster.csv"))
     md = (report / "REPORT.md").read_text(encoding="utf-8")
     section = md.split("## Nulled columns", 1)[1].split("\n## ", 1)[0]
     by_column = {line.split("`")[3]: line for line in section.splitlines() if line.startswith("- ")}
-    assert "by you" in by_column["Other_Score"] and "--null" in by_column["Other_Score"]
+    assert "by you" in by_column["Third_Score"] and "--null" in by_column["Third_Score"]
     auto = by_column["Parental_Education_Level"]
     assert "automatically" in auto and "describes another person" in auto
+
+
+@pytest.mark.parametrize("also_null", [[], ["--null", "Other_Score"]], ids=["written", "row_matches"])
+def test_an_automatic_null_gives_what_nulling_the_column_by_hand_gives(tmp_path, also_null):
+    """The column takes the same path as --null: same output, and the same privacy checks of the rest of the file (a
+    roster left with only Score has synthetic rows equal to real ones, so it is left out either way)."""
+    original = tmp_path / "original"
+    _roster(original, "Parental_Education_Level")
+    auto, out_auto, report_auto = _cli(original, tmp_path / "auto", *also_null)
+    by_hand, out_by_hand, report_by_hand = _cli(original, tmp_path / "by-hand", *also_null,
+                                                "--null", "Parental_Education_Level")
+    assert auto.exit_code == by_hand.exit_code == (3 if also_null else 0), (auto.output, by_hand.output)
+    assert sorted(p.name for p in out_auto.glob("*.csv")) == sorted(p.name for p in out_by_hand.glob("*.csv"))
+    for path in out_auto.glob("*.csv"):
+        assert path.read_bytes() == (out_by_hand / path.name).read_bytes()
+    if also_null:
+        assert "roster.csv" in (report_auto / "sharing-failures.csv").read_text(encoding="utf-8")

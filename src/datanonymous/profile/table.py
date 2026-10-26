@@ -129,12 +129,16 @@ def _profile_from(det: Detection, index: int, name: str, na_tokens: frozenset[st
 
 
 def profile_table(raw: RawTable, file_rel: str, fmt: str, settings: Settings,
-                  key_refs: dict[int, dict[str, Any]] | None = None, defer_d35: bool = False) -> TableProfile:
+                  key_refs: dict[int, dict[str, Any]] | None = None, defer_d35: bool = False,
+                  auto_null: dict[int, tuple[str, str | None]] | None = None) -> TableProfile:
     """Profile one table. ``key_refs`` (column index -> ``{'of', 'share'}``, from the run-level key discovery,
     R2-01) names columns found to hold another ID column's IDs: they are profiled as ID columns
     (``profile.entity.key_ref_detection``). ``defer_d35``: the D35 units are counted but not decided; the pipeline
     decides them over the whole run (:func:`finish_copy_gate`), so a value is judged by everyone the run shows
-    holding it and gets one pseudonym everywhere."""
+    holding it and gets one pseudonym everywhere. ``auto_null`` (column index -> (plain reason, alternative), sharing
+    mode, ADR-0001) names the columns sharing mode nulls because a generated copy of the file had blocking findings
+    about them: they are profiled exactly as ``--null`` would (every plan of the run sees them as nulled), and
+    labelled as nulled automatically (``profile.sharing.mark_auto_nulled``)."""
     na_tokens = settings.na_tokens
     profiles: list[ColumnProfile] = []
     contexts: dict[int, tuple[DetectContext, Detection]] = {}
@@ -143,7 +147,8 @@ def profile_table(raw: RawTable, file_rel: str, fmt: str, settings: Settings,
     dropped_marks: dict[int, dict[str, Any]] = {}
     for i, col in enumerate(raw.columns):
         opts = settings.column_options(file_rel, raw.name, col.name)
-        if opts.exclude or opts.null:
+        auto = (auto_null or {}).get(i)
+        if opts.exclude or opts.null or auto is not None:
             if (opts.pii_col or "").lower() == "phone" or (opts.force_type or "").upper() == "PHONE":
                 dropped_phones.add(i)
             # R7-02: the column is not written, but its values are real people's data: no generator of the run may
@@ -161,6 +166,10 @@ def profile_table(raw: RawTable, file_rel: str, fmt: str, settings: Settings,
             p.model = ColumnModel()
             p.stats = {"n": raw.n_rows}
             p.native = col.native
+            if auto is not None and not (opts.exclude or opts.null):
+                from .sharing import mark_auto_nulled
+
+                mark_auto_nulled(p, *auto)
             flagged = ("person-id" if opts.person_id else "id-col" if opts.id_col
                        else "force-type" if _forced_identifier(opts.force_type) else None)
             if flagged:  # R6-02: an ID column by flag, excluded or nulled: its real IDs stay real IDs of the run

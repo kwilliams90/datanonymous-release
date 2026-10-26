@@ -258,7 +258,7 @@ def profile_file(f: DiscoveredFile, settings: Settings, run: RunResult,
         fr.messages.extend(rr.messages)
         for t_i, t in enumerate(rr.tables):
             fr.tables.append(profile_table(t, f.rel_path, f.format, settings, (key_refs or {}).get(t_i),
-                                           defer_d35=True))
+                                           defer_d35=True, auto_null=f.auto_null.get(t_i)))
             if settings.mode == "sharing":
                 from .profile.sharing import record_evidence
 
@@ -680,11 +680,14 @@ def generate_file(fr: FileResult, settings: Settings, run: RunResult, reg: IdReg
 
 def _execute(settings: Settings, input_path: Path, out_dir: Path | None = None, report_dir: Path | None = None,
              mode: str = "run", *, _dirs_checked: bool = False,
-             _left_out: dict[str, FileResult] | None = None) -> RunResult:
+             _left_out: dict[str, FileResult] | None = None,
+             _auto_null: dict[str, dict[int, dict[int, tuple[str, str | None]]]] | None = None) -> RunResult:
     """Run (``mode='run'``) or inspect (``mode='inspect'``) and return the RunResult.
 
     ``_left_out`` (sharing): files an earlier attempt planned but could not write; they FAIL right after
-    profiling, with the earlier reason, so every plan is made over the files written.
+    profiling, with the earlier reason, so every plan is made over the files written. ``_auto_null`` (sharing,
+    ADR-0001): the columns earlier attempts found column-scoped blocking findings about after generation
+    (``RunResult.null_requests``); they are profiled as Nulled columns, so every plan sees them as nulled.
     """
     input_path = Path(input_path)
     if mode == "run":
@@ -706,6 +709,7 @@ def _execute(settings: Settings, input_path: Path, out_dir: Path | None = None, 
                     report_dir=report_dir if mode == "run" else None, seed=seed, seed_was_random=was_random,
                     skipped=list(disc.skipped), messages=list(disc.messages), data_mode=settings.mode)
     for f in disc.files:
+        f.auto_null = (_auto_null or {}).get(f.rel_path, {})
         fr = profile_file(f, settings, run)
         if fr is not None:
             if _left_out and fr.rel_path in _left_out and not fr.failed:
@@ -721,14 +725,25 @@ def _execute(settings: Settings, input_path: Path, out_dir: Path | None = None, 
     run.messages.extend(plan_key_refs(run, {f.rel_path: f for f in disc.files}, settings))
     fail_unrecognised_keys(run.files)  # D38: once the key discovery has made every ID column it can
     if settings.mode == "sharing" and mode == "run" and not settings.refuse_unsupported:
-        from .profile.sharing import null_unprotectable_columns
+        from .profile.sharing import AUTO_NULL_ALTERNATIVE_KEY, AUTO_NULL_SOURCE, null_unprotectable_columns
 
-        # ADR-0001: a non-key column sharing mode cannot protect is nulled (as --null does) before any run-wide
-        # plan, so every plan (real texts, IDs, pseudonyms, population) sees it as nulled
+        # ADR-0001: a non-key column sharing mode cannot protect is nulled the way --null does it: the run is profiled
+        # again from the start with the column nulled (``_auto_null``), so every profile-time record (the row-match
+        # keys, D35 holders, structure) and every run-wide plan (real texts, IDs, pseudonyms, population) sees it as
+        # nulled. Nothing of this attempt is planned or written.
         for fr in run.files:
-            if not fr.failed:
-                for tp in fr.tables:
-                    null_unprotectable_columns(tp, settings)
+            if fr.failed:
+                continue
+            for t_i, tp in enumerate(fr.tables):
+                null_unprotectable_columns(tp, settings)
+                before = (_auto_null or {}).get(fr.rel_path, {}).get(t_i, {})
+                for p in tp.columns:
+                    if p.source == AUTO_NULL_SOURCE and p.index not in before:
+                        reason = p.reason.split(" because ", 1)[1] if " because " in p.reason else p.reason
+                        run.null_requests.setdefault(fr.rel_path, {}).setdefault(t_i, {})[p.index] = (
+                            reason, p.params.get(AUTO_NULL_ALTERNATIVE_KEY))
+        if run.null_requests:
+            return run
     # R9-01: the run's real person IDs (every ID column of every file, FAILed and flagged ones too), which no value
     # written verbatim may equal, whatever the key discovery inferred
     ids = real_ids.plan(run.files)
@@ -805,6 +820,17 @@ def _execute(settings: Settings, input_path: Path, out_dir: Path | None = None, 
         w = generate_file(fr, settings, run, reg, namespaces)
         if w is not None:
             written.append(w)
+    if settings.mode == "sharing" and not settings.refuse_unsupported:
+        from .privacy.sharing_policy import finding_category
+        from .profile.sharing import column_scoped_findings
+
+        # ADR-0001: a written file whose only blocking findings are about non-key columns is generated again (same
+        # seed) with those columns nulled; any other finding still withholds it (below, and in package.finish)
+        for fr in run.files:
+            if fr.written and not fr.withheld:
+                scoped = column_scoped_findings(fr, finding_category)
+                if scoped:
+                    run.null_requests[fr.rel_path] = scoped
     if settings.mode == "sharing" and not settings.all_or_nothing:
         from .privacy import package
 
@@ -856,16 +882,26 @@ def execute(settings: Settings, input_path: Path, out_dir: Path | None = None, r
     check_dirs(Path(input_path), destination, local_report, False, sharing=True)
     package.check_fresh_destination(destination)
     left_out: dict[str, FileResult] = {}
+    auto_null: dict[str, dict[int, dict[int, tuple[str, str | None]]]] = {}
     was_random = False
     while True:
         stage = package.create_staging(local_report)
-        run = _execute(settings, input_path, stage, local_report, mode, _dirs_checked=True, _left_out=left_out)
-        if settings.all_or_nothing or not run.late_failures:
+        run = _execute(settings, input_path, stage, local_report, mode, _dirs_checked=True, _left_out=left_out,
+                       _auto_null=auto_null)
+        requests = run.null_requests
+        if not requests and (settings.all_or_nothing or not run.late_failures):
             break
+        shutil.rmtree(stage)
+        # ADR-0001: columns whose blocking findings were their file's only ones are nulled and the whole run planned
+        # and written again (same seed), so every run-wide plan sees them as nulled. Each attempt nulls columns not
+        # nulled before (a finding on a column already nulled withholds its file), so the attempts end.
+        for path, tables in requests.items():
+            for t_i, columns in tables.items():
+                auto_null.setdefault(path, {}).setdefault(t_i, {}).update(columns)
         # a file left out after planning: plan and write the others again without it (same seed), so no plan
         # (the row numbers 1..n kept, D9; the real texts it would have written) assumes it was written
-        shutil.rmtree(stage)
-        left_out.update((fr.rel_path, fr) for fr in run.late_failures)
+        if not settings.all_or_nothing:
+            left_out.update((fr.rel_path, fr) for fr in run.late_failures if fr.rel_path not in requests)
         if settings.seed is None:
             settings = dataclasses.replace(settings, seed=run.seed)
             was_random = True

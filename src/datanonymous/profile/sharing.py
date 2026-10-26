@@ -652,6 +652,8 @@ def protect_profile(tp: TableProfile, settings: Any) -> TableProfile:
 AUTO_NULL_CODE = "column_nulled_automatically"
 #: ``ColumnProfile.source`` of a column sharing mode nulled (``--null`` sets ``null``)
 AUTO_NULL_SOURCE = "auto-null"
+#: ``ColumnProfile.params`` key (PRIVATE) of what the operator can do instead of an automatic null
+AUTO_NULL_ALTERNATIVE_KEY = "_null_alternative"
 
 
 def _key_or_related(tp: TableProfile, index: int) -> bool:
@@ -690,24 +692,117 @@ def null_column(tp: TableProfile, index: int, reason: str, *, automatic: bool = 
     if old.type is ColumnType.PHONE or header_hints(old.name).pii == "phone":
         extra["_dropped_phone_columns"] = frozenset(extra.get("_dropped_phone_columns") or ()) | {index}
     extra.pop("_leak_dropped_digit_terms", None)  # privacy.leaks caches the dropped columns' digit terms
-    source, how = (AUTO_NULL_SOURCE, "nulled automatically") if automatic else ("null", "--null")
     new = ColumnProfile(index=index, name=old.name, type=ColumnType.EMPTY, role="null", na_tokens=old.na_tokens,
-                        source=source, reason=f"{how}: written as all-missing because {reason}",
+                        source="null", reason=f"--null: written as all-missing because {reason}",
                         model=ColumnModel(), stats={"n": tp.n_rows}, native=old.native)
     new.flags["nulled_automatically"] = automatic
     if automatic:
-        new.messages.append(Message(
-            "warning", AUTO_NULL_CODE,
-            f"column {old.name!r} was nulled automatically (written with every cell empty) because {reason}",
-            column=old.name,
-            fix=f"--exclude {old.name} drops the column instead; --refuse-unsupported leaves the file out instead"))
+        # an ID-like column (D7 candidate) may be an ID the operator can declare instead (ADR-0001)
+        mark_auto_nulled(new, reason, _id_alternative(old.name) if old.params.get("id_candidate") else None)
     tp.columns[index] = new
+    if old.params.get("id_candidate") and not any(p.params.get("id_candidate") for p in tp.columns):
+        # the table's ID-like candidates (D7) were all nulled: none of their real values is written any more
+        tp.messages = [m for m in tp.messages if m.code != "id_candidates"]
+        tp.messages = [Message("info", "no_id_column", "no ID column matched; each row is its own entity (D7)")
+                       if m.code == "no_id_column" else m for m in tp.messages]
     ent = tp.entity
     if index in ent.constant_columns:
         ent.constant_columns = [i for i in ent.constant_columns if i != index]
     ent.constant_shares.pop(index, None)
     tp.private.entity_models.pop(index, None)
     return new
+
+
+def mark_auto_nulled(p: ColumnProfile, reason: str, alternative: str | None = None) -> None:
+    """Label the Nulled column ``p`` as nulled by sharing mode (ADR-0001), not by the operator: its source, its plain
+    ``reason``, and the utility warning that reports it. ``alternative`` is what the operator can do instead to keep
+    the column (for an ID-like column: declare it as an ID), shown with it in the report."""
+    p.source = AUTO_NULL_SOURCE
+    p.reason = f"nulled automatically: written as all-missing because {reason}"
+    p.flags["nulled_automatically"] = True
+    if alternative:
+        p.params[AUTO_NULL_ALTERNATIVE_KEY] = alternative
+    instead = (alternative + "; " if alternative else "") + f"--exclude {p.name} drops the column instead"
+    p.messages.append(Message(
+        "warning", AUTO_NULL_CODE,
+        f"column {p.name!r} was nulled automatically (written with every cell empty) because {reason}",
+        column=p.name, fix=f"{instead}; --refuse-unsupported leaves the file out instead"))
+
+
+#: findings about whole rows or the whole file: nulling a column never answers them, so they still withhold the file
+_ROW_OR_FILE_CODES = ("row_matches_", "leak_scan_incomplete")
+#: findings that a non-key column looks like an ID or an ID-like code (``id_candidates`` and ``no_id_column`` name
+#: the table's candidate columns, ``params['id_candidate']``; ``possible_sparse_code`` is the column's own)
+_ID_LIKE_CODES = ("id_candidates", "no_id_column", "possible_sparse_code")
+
+
+def _id_alternative(name: str) -> str:
+    """What the operator can do instead of nulling the ID-like column ``name``: declare it as an ID."""
+    return (f"if it is an ID, declare it with --id-col {name} to get synthetic IDs (--person-id {name} when it is "
+            "the ID of the row's own person)")
+
+
+def _post_generation_reason(name: str, codes: list[str]) -> tuple[str, str | None]:
+    """(plain reason, alternative) for a column nulled because of the blocking findings ``codes`` about it."""
+    if any(code in _ID_LIKE_CODES for code in codes):
+        return ("it looks like an ID or a code number but is not used as a key, so its real values could not be "
+                "shared as ordinary numbers or labels", _id_alternative(name))
+    from ..messages import lookup
+
+    entry = lookup(codes[0])
+    found = f" ({entry.sentence.rstrip('.')})" if entry is not None and "{text}" not in entry.sentence else ""
+    return f"a privacy check of the generated file found a problem with it{found}", None
+
+
+def column_scoped_findings(fr: Any, finding_category: Any) -> dict[int, dict[int, tuple[str, str | None]]] | None:
+    """ADR-0001, second trigger: when every blocking finding (``finding_category``) of the generated file ``fr`` is
+    about one or more columns that are not keys, not in a structural relationship and not nulled already, the
+    columns to null before generating the file again, as {table number: {column index: (plain reason,
+    alternative)}}; else None (the file is withheld as before).
+
+    A finding about whole rows or the whole file (``row_matches_*``, an incomplete leak scan, any finding that names
+    no column) is not scoped to a column. A finding on a column already nulled is one that nulling did not clear: the
+    file is withheld, so the rounds of nulling end."""
+    targets: dict[tuple[int, int], list[str]] = {}
+
+    def add(t_i: int, index: int, code: str) -> bool:
+        tp = fr.tables[t_i]
+        if tp.columns[index].role in ("null", "excluded") or _key_or_related(tp, index):
+            return False
+        targets.setdefault((t_i, index), []).append(code)
+        return True
+
+    def scoped(message: Message) -> bool:
+        return not message.code.startswith(_ROW_OR_FILE_CODES)
+
+    def blocking(messages: Any) -> list[Message]:
+        return [m for m in messages if finding_category(m) == "blocking"]
+
+    for message in blocking(fr.messages):
+        hits = [(t_i, p.index) for t_i, tp in enumerate(fr.tables) for p in tp.columns if p.name == message.column]
+        if not scoped(message) or not message.column or len(hits) != 1 or not add(*hits[0], message.code):
+            return None
+    for t_i, tp in enumerate(fr.tables):
+        for message in blocking(tp.messages):
+            if not scoped(message):
+                return None
+            if message.code in ("id_candidates", "no_id_column") and not message.column:
+                hits = [p.index for p in tp.columns if p.params.get("id_candidate")]
+            else:
+                hits = [p.index for p in tp.columns if message.column and p.name == message.column]
+                hits = hits if len(hits) == 1 else []
+            if not hits or not all(add(t_i, i, message.code) for i in hits):
+                return None
+        for p in tp.columns:
+            for message in blocking(p.messages):
+                if not scoped(message) or not add(t_i, p.index, message.code):
+                    return None
+    if not targets:
+        return None
+    out: dict[int, dict[int, tuple[str, str | None]]] = {}
+    for (t_i, index), codes in sorted(targets.items()):
+        out.setdefault(t_i, {})[index] = _post_generation_reason(fr.tables[t_i].columns[index].name, codes)
+    return out
 
 
 def null_unprotectable_columns(tp: TableProfile, settings: Any) -> list[str]:
@@ -733,4 +828,4 @@ def null_unprotectable_columns(tp: TableProfile, settings: Any) -> list[str]:
 
 
 __all__ = ["record_evidence", "protect_profile", "verify_values", "null_column", "null_unprotectable_columns",
-           "AUTO_NULL_CODE", "AUTO_NULL_SOURCE", "EVIDENCE_KEY", "SOURCE_MODEL_KEY", "SUPPRESSED_KEY", "PERSON_DATE_KEY", "LOOKUP_KEY"]
+           "mark_auto_nulled", "column_scoped_findings", "AUTO_NULL_CODE", "AUTO_NULL_ALTERNATIVE_KEY", "AUTO_NULL_SOURCE", "EVIDENCE_KEY", "SOURCE_MODEL_KEY", "SUPPRESSED_KEY", "PERSON_DATE_KEY", "LOOKUP_KEY"]

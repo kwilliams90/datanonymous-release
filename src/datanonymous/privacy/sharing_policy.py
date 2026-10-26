@@ -18,8 +18,10 @@ POLICY_VERSION = "1"
 #: column's output as another dtype (a blanked --null column, say). Both are counts and formats, not source values.
 #: factor_overflow (warning level: not personal or free text, which is info): too many labels for a factor, so the
 #: column is written as generated text and no real label is kept; the leak scan still checks it.
+#: column_nulled_automatically: a non-key column sharing mode could not protect is written with every cell empty
+#: (ADR-0001); its real values are written nowhere and the leak scan looks for them.
 UTILITY_WARNINGS = frozenset({"fidelity_drift", "extremes_not_emitted", "panel_detected",
-                              "id_width_changed", "dtype_mismatch", "factor_overflow"})
+                              "id_width_changed", "dtype_mismatch", "factor_overflow", "column_nulled_automatically"})
 
 
 def validate_settings(settings: Any) -> None:

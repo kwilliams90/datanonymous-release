@@ -53,6 +53,20 @@ class GenerationError(DatanonymousError):
     """Generation failed for a reason other than the ID space."""
 
 
+class ColumnRefusal(GenerationError):
+    """Sharing mode cannot protect one column (ADR-0001).
+
+    ``column`` is the column's index in its table and ``plain`` the reason in plain words. When the column is
+    not a key and has no structural relationship, sharing mode writes it as a Nulled column instead of leaving
+    the file out (``profile.sharing.null_unprotectable_columns``), unless ``--refuse-unsupported``.
+    """
+
+    def __init__(self, message: str, fix: str | None = None, *, column: int, plain: str) -> None:
+        super().__init__(message, fix)
+        self.column = column
+        self.plain = plain
+
+
 class WriteError(DatanonymousError):
     """The synthetic file could not be written in the source format."""
 

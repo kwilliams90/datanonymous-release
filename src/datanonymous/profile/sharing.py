@@ -17,7 +17,7 @@ import numpy as np
 
 from ..detect import dates as date_detect
 from ..detect import text as text_detect
-from ..errors import GenerationError
+from ..errors import ColumnRefusal
 from ..hints import header_hints, tokens
 from ..model import LEVEL_TYPES, NEVER_COPY_TYPES, ColumnModel, ColumnProfile, ColumnType, Message, MissingnessModel, RawTable, TableProfile
 from ..generate.quota import largest_remainder
@@ -217,7 +217,8 @@ def _check_embedded_relationships(columns: list[ColumnProfile]) -> None:
                 key = kind, part.strip().casefold()
                 previous = seen.get(key)
                 if previous and (previous[0], previous[1]) != (p.index, raw) and (embedded or previous[2]):
-                    _refuse(p, "has a repeated embedded PII relationship whose source graph cannot be safely retained")
+                    _refuse(p, "has a repeated embedded PII relationship whose source graph cannot be safely retained",
+                            "the same e-mail address, phone number or name appears in more than one place, which could link records")
                 seen[key] = (p.index, raw, embedded or bool(previous and previous[2]))
 
 
@@ -322,9 +323,15 @@ def _clone_model(model: ColumnModel | None) -> ColumnModel | None:
     return replace(model, nonmissing_counts=dict(model.nonmissing_counts), missing_counts=dict(model.missing_counts), extra=extra)
 
 
-def _refuse(p: ColumnProfile, reason: str) -> None:
-    raise GenerationError(f"sharing mode: column {p.name!r} {reason}",
-                          fix=f"--null {p.name} or --exclude {p.name}; use --person-id COL when a column identifies the row's person")
+#: Plain reasons (ADR-0001: the report says why a column was nulled)
+_NO_PEOPLE = "no column says which person each row belongs to, so sharing mode cannot count how many people share its values"
+_TIED = "it is tied to another column by a key, dependency, template or rule that cannot be regenerated safely"
+
+
+def _refuse(p: ColumnProfile, reason: str, plain: str) -> None:
+    raise ColumnRefusal(f"sharing mode: column {p.name!r} {reason}",
+                        fix=f"--null {p.name} or --exclude {p.name}; use --person-id COL when a column identifies the row's person",
+                        column=p.index, plain=plain)
 
 
 def _rescale(counts: dict[Any, int], n: int) -> dict[Any, int]:
@@ -343,7 +350,8 @@ def _protect_model(p: ColumnProfile, model: ColumnModel, rare: set[str]) -> Colu
             continue
         nm[raw] += int(count)
     if not nm and not missing and model.n_nonmissing + model.n_missing:
-        _refuse(p, "has no category or missing value supported by enough distinct people in this table")
+        _refuse(p, "has no category or missing value supported by enough distinct people in this table",
+                "too few people share each of its values to keep any of them")
     total = model.n_nonmissing + model.n_missing
     # Suppressed units get zero rows. Reassign their mass within the same
     # missing/nonmissing group, or to the only remaining supported group.
@@ -437,7 +445,8 @@ def _check_native_storage(p: ColumnProfile) -> None:
         classes = {(kind, formats.get(kind) or "General") for kind, count in (native.get("types") or {}).items()
                    if count > 0}
     if len(classes) > 1:
-        _refuse(p, "has mixed Excel cell types or number formats without distinct-person support for their retained quotas")
+        _refuse(p, "has mixed Excel cell types or number formats without distinct-person support for their retained quotas",
+                "its cells mix Excel cell types or number formats that too few people share")
 
 
 def _trim_params(p: ColumnProfile, rare: set[str]) -> None:
@@ -464,13 +473,13 @@ def _structural_contracts(tp: TableProfile, dates: set[int]) -> None:
     sensitive = {p.index for p in tp.columns if p.role == "id" or _invented(p)} | dates
     for fd in tp.structure.private.get("fds", ()):
         if not fd.get("overridden") and sensitive.intersection((fd["det"], fd["dep"])):
-            _refuse(tp.columns[fd["dep"]], "has a source person dependency that cannot preserve fictional relationships")
+            _refuse(tp.columns[fd["dep"]], "has a source person dependency that cannot preserve fictional relationships", _TIED)
     # A template's source grouping carries the original distinct/frequency
     # relationship even after its input labels become fictional.
     for template in tp.structure.private.get("templates", ()):
         if template.get("groups") or sensitive.intersection(
                 {template["target"]} | {part[1] for part in template.get("parts", ()) if part[0] == "f"}):
-            _refuse(tp.columns[template["target"]], "has a source template relationship that cannot be safely regenerated")
+            _refuse(tp.columns[template["target"]], "has a source template relationship that cannot be safely regenerated", _TIED)
 
 
 def verify_values(profile: ColumnProfile, values: Any) -> list[Message]:
@@ -541,23 +550,26 @@ def protect_profile(tp: TableProfile, settings: Any) -> TableProfile:
         if p.model is None or p.role == "id":
             continue
         if p.model.n_nonmissing and _other_person_attribute(p):
-            raise GenerationError(
+            raise ColumnRefusal(
                 f"sharing mode: column {p.name!r} contains an intrinsic attribute of another person; "
                 "distinct-person support for that actor has not been established",
-                fix=f"--null {p.name} or --exclude {p.name}",
+                fix=f"--null {p.name} or --exclude {p.name}", column=p.index,
+                plain="it describes another person (such as a parent or teacher), and sharing mode cannot count "
+                      "how many of those people share each value",
             )
         source = tp.columns[p.index]
         p.model.extra[SOURCE_COLUMN_KEY] = source
         requested = {u for raw in (*source.model.nonmissing_counts, *source.model.missing_counts) for u in _units(source, raw)} | _native_units(source)
         held = (evidence.get("counts") or {}).get(p.index, {})
         if requested and not lookup and not evidence.get("people"):
-            _refuse(p, "cannot establish distinct-person support for its categories or missing values")
+            _refuse(p, "cannot establish distinct-person support for its categories or missing values", _NO_PEOPLE)
         rare = {u for u in requested if int(held.get(u, 0)) < k} if not lookup else set()
         if rare:
             if p.type in (ColumnType.NUMERIC_FORMATTED, ColumnType.NUMERIC_WITH_TOKENS, ColumnType.DECIMAL) and any(u.startswith("n:") for u in rare):
-                _refuse(p, "has a rare discrete numeric value that interpolation can restore")
+                _refuse(p, "has a rare discrete numeric value that interpolation can restore",
+                        "some of its values are held by too few people")
             if p.index in related:
-                _refuse(p, "has rare units in a structural key, dependency or rule that cannot be safely regenerated")
+                _refuse(p, "has rare units in a structural key, dependency or rule that cannot be safely regenerated", _TIED)
             p.model = _protect_model(source, p.model, rare)
             if p.index in private.entity_models:
                 private.entity_models[p.index] = _protect_model(source, private.entity_models[p.index], rare)
@@ -572,9 +584,9 @@ def protect_profile(tp: TableProfile, settings: Any) -> TableProfile:
             p.flags["sharing_rare_units_suppressed"] = True
         if not lookup and p.type in sharing_numeric.TYPES and p.model.n_nonmissing:
             if not evidence.get("people"):
-                _refuse(p, "cannot establish distinct-person support for its numeric measures")
+                _refuse(p, "cannot establish distinct-person support for its numeric measures", _NO_PEOPLE)
             if p.index in related:
-                _refuse(p, "has numeric extrema in a structural contract that cannot be safely regenerated")
+                _refuse(p, "has numeric extrema in a structural contract that cannot be safely regenerated", _TIED)
             number_holders = (evidence.get("numbers") or {}).get(p.index, {})
             forbidden = frozenset(key for key in sharing_numeric.source_extremes(source)
                                   if int(number_holders.get("n:" + key, 0)) < k)
@@ -605,7 +617,7 @@ def protect_profile(tp: TableProfile, settings: Any) -> TableProfile:
             p.params[PERSON_DATE_KEY] = True
             p.params["_no_exact_extremes"] = True
             if p.index in value_contracts:
-                _refuse(p, "has a protected person date in a structural contract that cannot be safely regenerated")
+                _refuse(p, "has a protected person date in a structural contract that cannot be safely regenerated", _TIED)
             from ..generate.sharing_dates import normalized_keys, source_extremes
 
             missing = list(source.model.missing_counts)
@@ -619,12 +631,13 @@ def protect_profile(tp: TableProfile, settings: Any) -> TableProfile:
                 changed.add(p.index)
         if not lookup and p.model.n_nonmissing and (_invented(p) or p.type in date_detect.DATE_TYPES):
             if not evidence.get("people"):
-                _refuse(p, "cannot establish distinct-person support for its retained date, text or PII classes")
+                _refuse(p, "cannot establish distinct-person support for its retained date, text or PII classes", _NO_PEOPLE)
             signatures = _generation_classes(source)
             held_classes = (evidence.get("classes") or {}).get(p.index, {})
             if any(int(held_classes.get(signature, 0)) < k for raw, signature in signatures.items()
                    if raw in p.model.nonmissing_counts):
-                _refuse(p, "has a date, text or PII format/frequency class supported by fewer than the required distinct people")
+                _refuse(p, "has a date, text or PII format/frequency class supported by fewer than the required distinct people",
+                        "some of its value layouts are shared by too few people")
     _structural_contracts(out, person_dates)
     # Source joint missingness can identify one pattern donor even when every
     # marginal is common. Only independent protected marginals survive.
@@ -635,4 +648,89 @@ def protect_profile(tp: TableProfile, settings: Any) -> TableProfile:
     return out
 
 
-__all__ = ["record_evidence", "protect_profile", "verify_values", "EVIDENCE_KEY", "SOURCE_MODEL_KEY", "SUPPRESSED_KEY", "PERSON_DATE_KEY", "LOOKUP_KEY"]
+#: The warning a column nulled by sharing mode carries (utility: it releases nothing real, ADR-0001)
+AUTO_NULL_CODE = "column_nulled_automatically"
+#: ``ColumnProfile.source`` of a column sharing mode nulled (``--null`` sets ``null``)
+AUTO_NULL_SOURCE = "auto-null"
+
+
+def _key_or_related(tp: TableProfile, index: int) -> bool:
+    """A key (ID column, alias, nesting, a column holding another ID column's keys) or a column in a structural
+    relationship (join, dependency, template, composite key, declared rule): nulling it would break what the
+    synthetic copy exists to keep, so its refusal still leaves the file out (ADR-0001)."""
+    from .entity import FLAGGED_ID_KEY
+
+    p = tp.columns[index]
+    ent = tp.entity
+    if p.role == "id" or index in ent.id_columns or index == ent.primary:
+        return True
+    if any(index in group for group in ent.aliases):
+        return True
+    if any(p.name in (n.get("child"), n.get("parent")) for n in ent.nesting):
+        return True
+    if any(p.params.get(key) for key in ("_key_ref", "_key_ref_list", FLAGGED_ID_KEY)):
+        return True
+    return index in _related_columns(tp)
+
+
+def null_column(tp: TableProfile, index: int, reason: str, *, automatic: bool = True) -> ColumnProfile:
+    """Turn column ``index`` of ``tp`` into a Nulled column, the way ``--null`` does: header and position kept,
+    every cell written missing, and its real values recorded as dropped (``privacy.texts.DROPPED_KEY``) so no
+    generator writes one and the leak scan looks for them. ``reason`` is the plain reason; ``automatic`` says
+    sharing mode (not the operator) nulled it, which the column records and reports as a utility warning.
+    Returns the new column profile (it replaces the old one in ``tp.columns``)."""
+    from ..hints import DEFAULT_NA_TOKENS
+    from ..privacy import texts as real_texts
+
+    old = tp.columns[index]
+    values = [*old.model.nonmissing_counts, *old.model.missing_counts] if old.model is not None else []
+    dropped = {v.strip() for v in values if isinstance(v, str)} - {""} - set(DEFAULT_NA_TOKENS)
+    extra = tp.private.extra
+    extra[real_texts.DROPPED_KEY] = {**(extra.get(real_texts.DROPPED_KEY) or {}), index: frozenset(dropped)}
+    if old.type is ColumnType.PHONE or header_hints(old.name).pii == "phone":
+        extra["_dropped_phone_columns"] = frozenset(extra.get("_dropped_phone_columns") or ()) | {index}
+    extra.pop("_leak_dropped_digit_terms", None)  # privacy.leaks caches the dropped columns' digit terms
+    source, how = (AUTO_NULL_SOURCE, "nulled automatically") if automatic else ("null", "--null")
+    new = ColumnProfile(index=index, name=old.name, type=ColumnType.EMPTY, role="null", na_tokens=old.na_tokens,
+                        source=source, reason=f"{how}: written as all-missing because {reason}",
+                        model=ColumnModel(), stats={"n": tp.n_rows}, native=old.native)
+    new.flags["nulled_automatically"] = automatic
+    if automatic:
+        new.messages.append(Message(
+            "warning", AUTO_NULL_CODE,
+            f"column {old.name!r} was nulled automatically (written with every cell empty) because {reason}",
+            column=old.name,
+            fix=f"--exclude {old.name} drops the column instead; --refuse-unsupported leaves the file out instead"))
+    tp.columns[index] = new
+    ent = tp.entity
+    if index in ent.constant_columns:
+        ent.constant_columns = [i for i in ent.constant_columns if i != index]
+    ent.constant_shares.pop(index, None)
+    tp.private.entity_models.pop(index, None)
+    return new
+
+
+def null_unprotectable_columns(tp: TableProfile, settings: Any) -> list[str]:
+    """ADR-0001: null every column whose protection refuses (:class:`ColumnRefusal`) and that is not a key or in a
+    structural relationship, until the table's profile can be protected. Returns the nulled columns' names.
+
+    A refusal on a key or relationship column, or any other error, stops here: the file is left out when it is
+    generated, with today's reason."""
+    nulled: list[str] = []
+    while True:
+        try:
+            protect_profile(tp, settings)
+        except ColumnRefusal as refusal:
+            i = refusal.column
+            if not (0 <= i < len(tp.columns)) or tp.columns[i].role in ("null", "excluded") or _key_or_related(tp, i):
+                return nulled
+            null_column(tp, i, refusal.plain, automatic=True)
+            nulled.append(tp.columns[i].name)
+        except Exception:  # noqa: BLE001 - generation reports it for the file (D19)
+            return nulled
+        else:
+            return nulled
+
+
+__all__ = ["record_evidence", "protect_profile", "verify_values", "null_column", "null_unprotectable_columns",
+           "AUTO_NULL_CODE", "AUTO_NULL_SOURCE", "EVIDENCE_KEY", "SOURCE_MODEL_KEY", "SUPPRESSED_KEY", "PERSON_DATE_KEY", "LOOKUP_KEY"]

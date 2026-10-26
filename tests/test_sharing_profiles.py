@@ -619,3 +619,18 @@ def test_uniform_excel_storage_is_preserved_and_null_excluded_columns_skip_guard
     for role in ("null", "excluded"):
         source.columns[1].role = role
         assert sharing.protect_profile(source, settings).columns[1].role == role
+
+
+def test_an_unprotectable_key_column_is_never_nulled_automatically():
+    # ADR-0001: a key with a column refusal still refuses; only a non-key column is nulled
+    source, settings = table(["General"] * 40, [f"S{i:03d}" for i in range(40)])
+    source.columns[0].native = {"kind": "excel", "storage": {"s": {"General": 39, "@": 1}}}
+    assert sharing.null_unprotectable_columns(source, settings) == []
+    assert source.columns[0].role == "id"
+    with pytest.raises(GenerationError, match="mixed Excel"):
+        sharing.protect_profile(source, settings)
+    source, settings = table(["General"] * 40, [f"S{i:03d}" for i in range(40)])
+    source.columns[1].native = {"kind": "excel", "storage": {"n": {"0.00": 39, "0.00000": 1}}}
+    assert sharing.null_unprotectable_columns(source, settings) == ["Status"]
+    assert source.columns[1].role == "null" and source.columns[1].messages[-1].code == "column_nulled_automatically"
+    sharing.protect_profile(source, settings)

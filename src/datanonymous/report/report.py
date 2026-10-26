@@ -1017,6 +1017,25 @@ def write_report(run: RunResult, settings: Settings) -> None:
     write_report_files(run.report_dir, build_report(run, settings))
 
 
+def nulled_columns(run: RunResult) -> list[tuple[str, str, bool, str]]:
+    """(file, column, nulled automatically, plain reason) of every Nulled column of the files written: by the
+    operator (``--null``) or by sharing mode (ADR-0001)."""
+    from ..profile.sharing import AUTO_NULL_SOURCE
+
+    out = []
+    for fr in run.files:
+        if not fr.written or fr.withheld:
+            continue
+        for tp in fr.tables:
+            for p in tp.columns:
+                if p.role != "null":
+                    continue
+                automatic = p.source == AUTO_NULL_SOURCE
+                reason = p.reason.split(" because ", 1)[1] if automatic and " because " in p.reason else ""
+                out.append((fr.rel_path, p.name, automatic, reason))
+    return out
+
+
 def run_markdown(run: RunResult, data: dict[str, Any]) -> str:
     v = data["verdict"]
     t = data["totals"]
@@ -1107,6 +1126,16 @@ def run_markdown(run: RunResult, data: dict[str, Any]) -> str:
             cands = _candidates(by_source.get(w.get("file"))) if w.get("file") else run_cands
             fix = f" Fix: {fix_markdown(w['fix'], cands)}" if w.get("fix") else ""
             lines.append(f"- {where}{col}: {_period(fix_markdown(w['text'], cands))}{fix}")
+        lines.append("")
+    nulled = nulled_columns(run)
+    if nulled:
+        lines += ["## Nulled columns", "",
+                  "Written with their header and position kept and every cell empty; their real values appear "
+                  "nowhere in the output.", ""]
+        for file, column, automatic, reason in nulled:
+            how = (f"nulled automatically because {_md(reason)}" if automatic
+                   else "nulled by you (--null)")
+            lines.append(f"- {code_span(_md(file))} {code_span(column)}: {how}")
         lines.append("")
     notes = [n for n in data.get("notes") or [] if n.get("code") != "extreme_exposure"]
     out_notes: list[str] = []

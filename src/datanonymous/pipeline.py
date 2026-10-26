@@ -717,6 +717,15 @@ def _execute(settings: Settings, input_path: Path, out_dir: Path | None = None, 
         run.messages.append(Message("warning", "unused_column_flag", f"column reference {ref!r} matched no column"))
     run.messages.extend(plan_key_refs(run, {f.rel_path: f for f in disc.files}, settings))
     fail_unrecognised_keys(run.files)  # D38: once the key discovery has made every ID column it can
+    if settings.mode == "sharing" and mode == "run" and not settings.refuse_unsupported:
+        from .profile.sharing import null_unprotectable_columns
+
+        # ADR-0001: a non-key column sharing mode cannot protect is nulled (as --null does) before any run-wide
+        # plan, so every plan (real texts, IDs, pseudonyms, population) sees it as nulled
+        for fr in run.files:
+            if not fr.failed:
+                for tp in fr.tables:
+                    null_unprotectable_columns(tp, settings)
     # R9-01: the run's real person IDs (every ID column of every file, FAILed and flagged ones too), which no value
     # written verbatim may equal, whatever the key discovery inferred
     ids = real_ids.plan(run.files)

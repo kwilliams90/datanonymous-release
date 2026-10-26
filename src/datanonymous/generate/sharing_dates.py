@@ -17,7 +17,7 @@ import numpy as np
 
 from ..detect import dates as D
 from ..detect.dates_formats import US_DAY, civil_from_days, days_from_civil
-from ..errors import GenerationError
+from ..errors import ColumnRefusal, GenerationError
 from ..model import ColumnModel, ColumnProfile
 from ..profile.sharing import SOURCE_MODEL_KEY
 from . import dates as G
@@ -75,8 +75,10 @@ def source_extremes(profile: ColumnProfile, model: ColumnModel | None = None) ->
 
 
 def _refuse(profile: ColumnProfile) -> None:
-    raise GenerationError(f"sharing mode: column {profile.name!r} has no month-preserving date cover that hides its original extrema in the required format/calendar",
-                          fix=f"--null {profile.name} or --exclude {profile.name}; use a finer date precision or remove the rigid calendar constraint")
+    raise ColumnRefusal(f"sharing mode: column {profile.name!r} has no month-preserving date cover that hides its original extrema in the required format/calendar",
+                        fix=f"--null {profile.name} or --exclude {profile.name}; use a finer date precision or remove the rigid calendar constraint",
+                        column=profile.index,
+                        plain="its dates cannot be moved enough within their months to hide the earliest and latest real dates")
 
 
 def _month_days(month: int) -> np.ndarray:
@@ -145,9 +147,10 @@ def validate_bucket_support(profile: ColumnProfile) -> None:
     held = model.extra.get(BUCKET_HOLDERS_KEY) or {}
     minimum = max(10, int(model.extra.get(BUCKET_MIN_KEY, 10)))
     if any(int(held.get(key, 0)) < minimum for key in visible):
-        raise GenerationError(
+        raise ColumnRefusal(
             f"sharing mode: column {profile.name!r} has an excluded endpoint calendar bucket supported by fewer than the required distinct people",
-            fix=f"--null {profile.name} or --exclude {profile.name}; use --person-id COL when a column identifies the row's person")
+            fix=f"--null {profile.name} or --exclude {profile.name}; use --person-id COL when a column identifies the row's person",
+            column=profile.index, plain="too few people have dates near its earliest or latest real date to hide them")
 
 
 def _covered_pool(profile: ColumnProfile, days: np.ndarray, forbidden_days: set[int], *, datetime: bool = False) -> np.ndarray:

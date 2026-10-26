@@ -8,7 +8,7 @@ from typing import Any
 
 import numpy as np
 
-from ..errors import GenerationError
+from ..errors import ColumnRefusal
 from ..model import ColumnModel, ColumnProfile, ColumnType as T
 from .numeric import exact_value
 from .quota import largest_remainder
@@ -60,8 +60,9 @@ def forbidden_extremes(profile: ColumnProfile) -> frozenset[str]:
 
 
 def _refuse(profile: ColumnProfile) -> None:
-    raise GenerationError(f"sharing mode: column {profile.name!r} has no feasible numeric support after removing unsupported original extrema",
-                          fix=f"--null {profile.name} or --exclude {profile.name}")
+    raise ColumnRefusal(f"sharing mode: column {profile.name!r} has no feasible numeric support after removing unsupported original extrema",
+                        fix=f"--null {profile.name} or --exclude {profile.name}", column=profile.index,
+                        plain="once its highest and lowest values, which too few people hold, are removed, no values are left to generate from")
 
 
 def protect_model(profile: ColumnProfile, model: ColumnModel, forbidden: frozenset[str]) -> ColumnModel:

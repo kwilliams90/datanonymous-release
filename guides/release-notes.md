@@ -1,3 +1,17 @@
+# Unreleased
+
+- Rows that match real rows only by chance no longer leave a file out
+  (issue 11). A table whose comparable columns form a single group, such as a
+  one-column table of `20.8%`-style values or a table that `--null` or
+  automatic nulling cut to one such column, is no longer checked for
+  whole-row matches. Swapping cannot change those matches. Other tables, such
+  as small categorical ones where many rows match by chance, are compared with
+  a baseline that shuffles their independently generated columns against each
+  other 200 times. A file whose matches are no more common than that baseline
+  is written with the warning `row_matches_coincidental`. A file that matches
+  more often, as a copy of real rows would, is still left out.
+  `--refuse-unsupported` keeps the earlier behaviour.
+
 # Release candidate 0.1.0rc3
 
 Sharing mode now tries to make each file work while still never releasing a

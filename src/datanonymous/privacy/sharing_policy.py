@@ -24,9 +24,12 @@ POLICY_VERSION = "1"
 #: sharing_rows_as_people: a table with no person column and no sign of repeated people counted each row as a person
 #: (ADR-0006); rare values are still suppressed by those counts, and the report names the --person-id fix.
 #: column_excluded: --exclude leaves a column out, which releases less and never more (issue 26).
+#: row_matches_coincidental: whole-row matches no more common than shuffling the independently generated columns
+#: against each other gives (issue 11, privacy.matches); matches above that baseline still block. Under
+#: --refuse-unsupported the gate does not make this code, so those files are left out as before.
 UTILITY_WARNINGS = frozenset({"fidelity_drift", "extremes_not_emitted", "panel_detected",
                               "id_width_changed", "dtype_mismatch", "factor_overflow", "column_nulled_automatically",
-                              "sharing_rows_as_people", "column_excluded"})
+                              "sharing_rows_as_people", "column_excluded", "row_matches_coincidental"})
 
 
 #: options that sharing mode refuses (or refuses in the form a fix would suggest them): a sharing-mode message never

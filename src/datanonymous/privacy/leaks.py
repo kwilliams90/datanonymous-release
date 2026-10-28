@@ -292,6 +292,7 @@ _VALUE_FREE_STATS = frozenset({"n", "missing", "missing_rate", "missing_tokens",
 COUNT_ONLY_CODES = frozenset({
     "line_endings_mixed", "blank_lines_dropped", "quoting_inconsistent", "factor_overflow",
     "possible_sparse_code", "id_width_changed", "row_matches_report_only", "row_matches_remaining",
+    "row_matches_coincidental",
     "fidelity_drift", "dtype_mismatch",
     # added at integration (the areas were built in parallel): counts plus column/sheet names and formats only
     "date_mixed_formats", "date_sentinels", "date_tokens", "date_unparsed_replaced",  # A

@@ -32,7 +32,7 @@ Headers, sheet names and paths are written exactly as they are (scripts depend o
 
 ## What you get
 
-**Out dir** (`--out-dir`, required): only synthetic files plus documentation computed from the synthetic data.
+**Out dir** (`--out-dir`; required unless a config file sets `output_root` and `report_root`, which then give each run its own folders): only synthetic files plus documentation computed from the synthetic data.
 
 - each synthetic file at the same relative path and file name as its source (a real `.xls` is written as `.xlsx`, SAS files as `.parquet`);
 - `README.md`: what is and is not preserved;
@@ -72,13 +72,14 @@ Column options are repeatable (`--id-col a --id-col b`); there are no comma list
 | Floors | `--no-exact-extremes COL`, `--min-cell K` (10) |
 | Columns | `--null COL` (write as all-missing), `--exclude COL` (drop; the schema changes) |
 | Input | `--encoding`, `--delimiter`, `--sheet NAME`, `--header-row N`, `--range [SHEET!]A5:H200` (Excel table region; repeatable), `--include GLOB`, `--exclude-path GLOB`, `--keep-name TEXT` (a header, sheet, file or folder name flagged as personal data that is not; repeatable, one per name) |
+| Sharing | `--all-or-nothing` (write nothing unless every input file is written), `--refuse-unsupported` (leave a file out when one of its non-key columns cannot be protected, instead of writing that column as a Nulled column) |
 | Run | `--seed INT`, `--config FILE.yaml`, `--force`, `--max-row-matches PCT`, `--no-strict`, `--keep-titles` (copy Excel title/notes rows and CSV footer notes verbatim), `-v` / `-q`, `--json` |
 
 `TYPE` is a type name as shown by `inspect` (for example `FACTOR`, `INTEGER`, `FLOAT`, `IDENTIFIER`, `FREE_TEXT`). `--force`, `--max-row-matches`, `--no-strict` and `--keep-titles` apply to `run` only; `inspect` takes every other option. Without `--seed` a random seed is drawn, printed and recorded; the same seed, input and library versions give byte-identical output. A non-empty out dir or report dir needs `--force`. `--force` overwrites files but never deletes any: if a file that was written by an earlier run FAILs this time, its old copy stays in the out dir, and the console, the report and the out-dir `README.md` say it was not regenerated. The input folder, the out dir and the report dir must be three separate folders: none may be, contain or lie inside another, judged by where they really are (symlinks, junctions, short names and other aliases are resolved). An existing out dir or report dir may not hold a link that leads out of it, and an input folder or file that really lives in the out dir or report dir is refused. Contradictory column flags (for example `--force-factor X --force-text X`) are usage errors: nothing is written. An internal error FAILs its file with the error's class and code line (`ValueError at _reader.py:83`); `-v` adds its traceback as exception classes and code locations (file, line, function) only, never an exception's message, arguments, notes or variables, which may quote a cell. Warnings of the libraries the tool uses are printed with `-v` only, as their category and code location.
 
 ### Config file
 
-Standing settings go in a YAML file passed with `--config`. Keys are the option names with `_` instead of `-`. Command-line values win over the file; repeatable options are combined. When the file and the command line both set how one column is treated, the command line wins, however either names the column: `--force-text x` replaces `force_factor: [x]`, and `--force-type data.csv::score=INTEGER` replaces `force_type: {score: FLOAT}` for that file. A command-line type option does not undo a `null` or `exclude` from the file.
+Standing settings go in a YAML file passed with `--config`. A user config file in your platform's config folder is loaded first and automatically, so `--config` overrides it, and the command line overrides both (see the [operator guide](operations.md#set-your-folders-once)). Two keys set standing folders: `output_root` and `report_root`; with both set, a run with no `--out-dir` writes to `<output_root>/<input-name>-<YYYYMMDD-HHMMSS>/` and its report to `<report_root>/<same name>/`. `output_root` without `report_root` is refused. `refuse_unsupported` and `all_or_nothing` are accepted as keys too. Keys are the option names with `_` instead of `-`. Command-line values win over the file; repeatable options are combined. When the file and the command line both set how one column is treated, the command line wins, however either names the column: `--force-text x` replaces `force_factor: [x]`, and `--force-type data.csv::score=INTEGER` replaces `force_type: {score: FLOAT}` for that file. A command-line type option does not undo a `null` or `exclude` from the file.
 
 ```yaml
 mode: fidelity

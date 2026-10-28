@@ -65,7 +65,8 @@ def withhold_blocked(run: Any, stage: Path, written: list[Any]) -> list[Any]:
         codes = sorted({message.code for message in _blocking(file.all_messages())})
         if file.written and codes:
             file.fail(f"not written to the output folder: its findings block sharing ({', '.join(codes)})",
-                      "see this file's warnings; fix the input or its column options and run again")
+                      "see this file's warnings; fix the input or its column options and run again",
+                      code="withheld_by_findings")
     for file in run.files:
         if file.failed:
             _remove_staged(stage, file.out_rel_on_disk)
@@ -209,8 +210,9 @@ def finish(run: Any, destination: Path, stage: Path, all_or_nothing: bool = Fals
         if run.any_failed or not run.files or any(not file.written for file in run.files):
             blockers.append(Message("error", "sharing_incomplete",
                                     "--all-or-nothing: an input file was not written, so none is"))
-        # Skips may conceal a sensitive input or an unsupported portion of a dataset.
-        if run.skipped:
+        # Skips may conceal a sensitive input or an unsupported portion of a dataset; a file the selection
+        # (--include / --exclude-path) left out on purpose is not part of the input set.
+        if any(not getattr(skipped, "deselected", False) for skipped in run.skipped):
             blockers.append(Message("error", "sharing_skipped_inputs",
                                     "--all-or-nothing: an input file was skipped, so none is written",
                                     fix="select a supported input set explicitly and regenerate"))
@@ -234,7 +236,7 @@ def finish(run: Any, destination: Path, stage: Path, all_or_nothing: bool = Fals
                                     "nothing was written to the output folder; see the report's failures and run again"))
         for file in run.files:
             if not file.failed:
-                file.fail("not written to the output folder: a run-level problem withheld every file")
+                file.fail("not written to the output folder: a run-level problem withheld every file", code="withheld_by_run")
         run.docs = {}
         return evidence
     check_fresh_destination(destination)

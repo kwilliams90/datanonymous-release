@@ -34,11 +34,13 @@ def family_id(i: int) -> str:
 
 def corpus_rows(variant: str = "canonical") -> dict[str, list[dict[str, str]]]:
     """Return fresh records; variants each change one independently stated risk."""
-    if variant not in {"canonical", "categorical_only", "rare_iep", "thirteen_events", "rare_id"}:
+    if variant not in {"canonical", "categorical_only", "rare_iep", "thirteen_events", "rare_id", "email_id"}:
         raise ValueError(f"unknown fixture variant: {variant}")
     ids = [student_id(i) for i in range(PERSON_COUNT)]
     if variant == "rare_id":
         ids[-1] = "XX-901234"
+    if variant == "email_id":  # sharing mode still refuses e-mail-address IDs (ADR-0004)
+        ids[-1] = "pat.quill@example.org"
 
     def identity(i: int) -> dict[str, str]:
         return {"Student_ID": ids[i], "State_Student_ID": state_id(i),

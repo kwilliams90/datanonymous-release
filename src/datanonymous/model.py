@@ -628,12 +628,23 @@ class DiscoveredFile:
     compression: str | None = None
     notes: list[Message] = field(default_factory=list)
     preflight_error: tuple[str, str | None] | None = None  # (message, fix) -> FAIL before reading
+    #: sharing mode (ADR-0001): table number -> column index -> (plain reason, alternative) of the columns an earlier
+    #: attempt found blocking findings about after generation; they are profiled as Nulled columns
+    auto_null: dict[int, dict[int, tuple[str, str | None]]] = field(default_factory=dict)
 
 
 @dataclass
 class SkippedFile:
     rel_path: str
     reason: str
+    #: left out on purpose by --include / --exclude-path, not an input the run could not handle
+    deselected: bool = False
+    #: a file that is not a table format at all (a PDF, an image, a Word document): summarised, not actionable
+    routine: bool = False
+    #: what the routine summary counts it by (``.pdf``); empty for an actionable or deselected input
+    ext: str = ""
+    #: message-catalogue code explaining an actionable input in plain language
+    code: str = ""
 
 
 @dataclass
@@ -680,14 +691,16 @@ class FileResult:
     def failed(self) -> bool:
         return self.status is Status.FAIL
 
-    def fail(self, reason: str, fix: str | None = None) -> None:
+    def fail(self, reason: str, fix: str | None = None, code: str | None = None,
+             column: str | None = None) -> None:
+        """FAIL the file. ``code`` names the message-catalogue entry that explains it in plain language."""
         self.clear_reread()
         self.status = Status.FAIL
         self.written = False
         self.reasons.append(reason)
         if fix:
             self.fixes.append(fix)
-        self.messages.append(Message("error", "fail", reason, fix=fix))
+        self.messages.append(Message("error", code or "fail", reason, column=column, fix=fix))
 
     def all_messages(self) -> list[Message]:
         out = list(self.messages)
@@ -721,6 +734,13 @@ class RunResult:
     debug: list[str] = field(default_factory=list)  # tracebacks of internal errors (stderr with -v only)
     data_mode: str = "fidelity"
     package: dict[str, Any] | None = None  # local sharing-package evidence, never part of the released data
+    #: PRIVATE: files planned for writing that FAILed during generation or were withheld after it; sharing runs
+    #: again without them, because every run-wide plan (row-number IDs, real-text excuses) assumed they were written
+    late_failures: list[FileResult] = field(default_factory=list, repr=False, compare=False)
+    #: PRIVATE: sharing (ADR-0001): file -> table number -> column index -> (plain reason, alternative) of the non-key
+    #: columns whose blocking findings after generation were the file's only ones; sharing runs again with them nulled
+    null_requests: dict[str, dict[int, dict[int, tuple[str, str | None]]]] = field(
+        default_factory=dict, repr=False, compare=False)
 
     @property
     def any_failed(self) -> bool:

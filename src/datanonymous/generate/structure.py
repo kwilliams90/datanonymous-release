@@ -105,6 +105,9 @@ from .quota import largest_remainder, quota_sample
 T = ColumnType
 #: tp.private.extra key: blank/non-blank state of the structural columns after the FD/rule step (finalize check)
 _MISSING_SNAPSHOT = "structure_missing_snapshot"
+#: template info key set by sharing mode (``profile.sharing.REBUILT_KEY``, issue #30): the target is written from the
+#: template only, a row it cannot fill safely being written empty
+_SHARING_REBUILT = "_sharing_rebuilt_from"
 
 
 def _label_generated(p: ColumnProfile) -> bool:
@@ -1155,6 +1158,8 @@ def _apply_template(tp: Any, columns: dict[int, np.ndarray], info: dict[str, Any
     parts = info["parts"]
     cols = sorted({p[1] for p in parts if p[0] == "f"})
     if any(c not in columns for c in cols):
+        if info.get(_SHARING_REBUILT):  # never its own generated values (issue #30)
+            columns[t] = np.full(len(columns[t]), None, dtype=object)
         return msgs, set()
     vals = columns[t]
     miss = missing_mask(vals, "typed", pt.na_tokens)  # placeholders such as 'N/A' are kept as they are
@@ -1215,7 +1220,11 @@ def _apply_template(tp: Any, columns: dict[int, np.ndarray], info: dict[str, Any
     # a rebuilt value equal to a real value of the column, or to a real text of any column of the run that the run
     # never writes (privacy.texts, R7-01/R7-02), keeps its independently generated value
     texts = _run_texts(tp)
-    hit_u = np.fromiter((u.casefold() in real_cf or (texts is not None and texts.holds(u)) for u in uniq_l),
+    rebuilt = bool(info.get(_SHARING_REBUILT))
+    # sharing mode (issue #30): nor may an address have the local part of a real one (the leak scan's e-mail rule)
+    real_locals = {v.rpartition("@")[0] for v in real_cf if "@" in v} if rebuilt and info["email"] else set()
+    hit_u = np.fromiter((u.casefold() in real_cf or (texts is not None and texts.holds(u))
+                         or (bool(real_locals) and u.casefold().rpartition("@")[0] in real_locals) for u in uniq_l),
                         dtype=bool, count=len(uniq))
     hit = hit_u[codes] & ~skip
     held = np.zeros(len(rows), dtype=bool)
@@ -1225,6 +1234,10 @@ def _apply_template(tp: Any, columns: dict[int, np.ndarray], info: dict[str, Any
     skipped, collided, n_held = int(skip.sum()), int(hit.sum()), int(held.sum())
     ok = ~skip & ~hit & ~held
     out[rows[ok]] = text[ok]
+    if rebuilt:
+        # sharing mode writes this column from the template only: its own generated values are never released, so a
+        # row the template cannot fill safely is written empty
+        out[rows[~ok]] = None
     columns[t] = out
     # rows keeping an independent value (not from the template): the fidelity check allows for them
     pt.params["_template_rows_kept"] = skipped + collided + n_held
@@ -1233,7 +1246,8 @@ def _apply_template(tp: Any, columns: dict[int, np.ndarray], info: dict[str, Any
         msgs.append(Message("warning", "template_partly_applied",
                             f"derived template not applied in {skipped + collided + n_held} row(s) "
                             f"({skipped} with a missing input, {collided} that would equal a real value{also}); "
-                            "those rows keep an independently generated value", column=pt.name))
+                            + ("those rows are written empty" if rebuilt
+                               else "those rows keep an independently generated value"), column=pt.name))
     return msgs, changed
 
 

@@ -1,0 +1,3 @@
+# Rare rows-per-person count classes are rebalanced, not refused
+
+A table whose rows-per-person counts include a class held by fewer than `--min-cell` people used to be left out, because releasing that count could point at its one source person. Sharing mode now moves the rows of rare count classes into the nearest classes that enough people hold, the same way rare ID lengths are folded into held lengths. Every count class in the output is held by at least `--min-cell` source people, and the table's row total stays exact. To make that work, the number of fictional people in the table may differ from the source. If no class is held, or the row total cannot be met exactly, the table is still left out.

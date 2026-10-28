@@ -28,7 +28,7 @@ from typing import Any, Callable
 import click
 
 from . import __version__, diagnostics
-from .config import build_settings, load_config
+from .config import build_settings, load_layered_config
 from .errors import DatanonymousError, UsageError
 
 EXIT_OK, EXIT_ERROR, EXIT_USAGE, EXIT_FAILED = 0, 1, 2, 3
@@ -132,12 +132,40 @@ def common_options(f: Callable[..., Any]) -> Callable[..., Any]:
     return f
 
 
+def run_folders(settings: Any, input_path: Path, out_dir: Path | None, report_dir: Path | None
+                ) -> tuple[Path | None, Path | None]:
+    """The folders a run will write to, as the pipeline resolves them (standing roots, then the report default)."""
+    from . import rundirs
+    from .discover import default_report_dir
+
+    out_dir, report_dir = rundirs.resolve(settings, input_path, out_dir, report_dir)
+    if out_dir is not None and report_dir is None:
+        report_dir = default_report_dir(Path(out_dir))
+    return out_dir, report_dir
+
+
+def destination_lines(out_dir: Path | None, report_dir: Path | None) -> list[str]:
+    """The labelled destinations at the start of a run (issue 19), screened like the other console paths."""
+    from .report.report import PRIVATE_LABEL, SHAREABLE_LABEL
+
+    if out_dir is None or report_dir is None:
+        return []
+    return [_screened(f"{SHAREABLE_LABEL}: {out_dir}"), _screened(f"{PRIVATE_LABEL}: {report_dir}")]
+
+
 def _settings(kw: dict[str, Any]):  # noqa: ANN202
-    config = load_config(kw["config_path"]) if kw.get("config_path") else {}
+    config, config_files = load_layered_config(kw.get("config_path"))
     cli = dict(kw)
     cli["verbosity"] = -1 if cli.pop("quiet", False) else cli.pop("verbose", 0)
     cli.pop("verbose", None)
-    return build_settings(cli, config)
+    settings = build_settings(cli, config)
+    settings.config_files = config_files
+    return settings
+
+
+def config_lines(settings: Any) -> list[str]:
+    """Which config file(s) the run loaded, so standing settings are never invisible."""
+    return [_screened(f"Config loaded: {f}") for f in settings.config_files]
 
 
 def _screened(text: str) -> str:
@@ -186,9 +214,10 @@ def main() -> None:
 
 @main.command("run")
 @click.argument("input", type=click.Path(path_type=Path))
-@click.option("--out-dir", "out_dir", required=True, type=click.Path(file_okay=False, path_type=Path),
+@click.option("--out-dir", "out_dir", default=None, type=click.Path(file_okay=False, path_type=Path),
               help="Folder for the synthetic files (+ README, DATA_DICTIONARY, schema). Must be a new or empty "
-                   "folder outside the input and the report folder (it is created if missing).")
+                   "folder outside the input and the report folder (it is created if missing). Required unless "
+                   "a config file sets output_root and report_root (then each run gets its own folder).")
 @click.option("--report-dir", "report_dir", default=None, type=click.Path(file_okay=False, path_type=Path),
               help="Folder for the report, kept locally (default: <out-dir>-report). A new or empty folder; it may "
                    "be inside the input.")
@@ -197,13 +226,16 @@ def main() -> None:
 @click.option("--all-or-nothing", "all_or_nothing", is_flag=True, default=False,
               help="Sharing mode: write nothing unless every input file can be written (default: leave out the "
                    "files that cannot and list them in <report-dir>/sharing-failures.csv).")
+@click.option("--refuse-unsupported", "refuse_unsupported", is_flag=True, default=False,
+              help="Sharing mode: leave a file out when one of its non-key columns cannot be protected (default: "
+                   "write that column with every cell empty and list it in the report).")
 @click.option("--max-row-matches", type=click.FloatRange(0, 100), default=None, metavar="PCT",
               help="Fail a file whose remaining chance row matches exceed PCT percent.")
 @click.option("--no-strict", is_flag=True, default=False, help="Layout self-check differences only warn.")
 @click.option("--keep-titles", is_flag=True, default=False,
               help="Copy Excel title/notes rows and CSV footer notes verbatim (default: same-shape placeholders).")
 @common_options
-def run_cmd(input: Path, out_dir: Path, report_dir: Path | None, **kw: Any) -> None:
+def run_cmd(input: Path, out_dir: Path | None, report_dir: Path | None, **kw: Any) -> None:
     """Profile INPUT (file or directory) and write synthetic copies to --out-dir."""
     verbose = bool(kw.get("verbose"))
 
@@ -212,11 +244,17 @@ def run_cmd(input: Path, out_dir: Path, report_dir: Path | None, **kw: Any) -> N
         from .report.report import console_summary, finite_json, redact_console, run_json
 
         settings = _settings(kw)
-        result = pipeline.execute(settings, input, out_dir, report_dir, mode="run")
+        run_out, run_report = run_folders(settings, input, out_dir, report_dir)
+        if not settings.json_output and settings.verbosity >= 0:
+            for line in destination_lines(run_out, run_report):
+                _echo(line)
+        result = pipeline.execute(settings, input, run_out, run_report, mode="run")
         if settings.json_output:
-            click.echo(json.dumps(finite_json(run_json(result)), indent=2, ensure_ascii=True, allow_nan=False))
+            payload = run_json(result)
+            payload["config_files"] = list(settings.config_files)
+            click.echo(json.dumps(finite_json(payload), indent=2, ensure_ascii=True, allow_nan=False))
         elif settings.verbosity >= 0:
-            for line in console_summary(result):
+            for line in config_lines(settings) + console_summary(result):
                 _echo(line)
         if verbose:
             for d in result.debug:

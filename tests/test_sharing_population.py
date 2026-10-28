@@ -1,5 +1,6 @@
 """Invented adversarial and utility fixtures for the D47--D49 population planner."""
 
+import re
 from collections import Counter
 import numpy as np
 import pytest
@@ -8,7 +9,8 @@ from datanonymous.config import Settings
 from datanonymous.detect.ids import normalize_id
 from datanonymous.errors import UnsupportedColumnError
 from datanonymous.generate.ids import IdRegistry
-from datanonymous.generate.population import PLAN_KEY, generation_profile, plan_population
+from datanonymous.generate.population import (PLAN_KEY, _fold_widths, _rebalance_counts, generation_profile,
+                                              plan_population)
 from datanonymous.generate.table import GenContext, generate_table
 from datanonymous.model import (ColumnProfile, ColumnType, EntityProfile, FileResult, RawColumn, RawTable,
                                TablePrivate, TableProfile)
@@ -111,6 +113,7 @@ def test_known_seed_cannot_replay_or_influence_a_source_mapping():
 
 
 def test_unique_thirteen_event_donor_blocks_before_attaching_any_plan():
+    # every held count is even and the row total is odd, so no exact rebalancing exists: the table is left out
     roster = _file("roster.csv", {"student_id": _ids()})
     events = _file("events.csv", {"student_id": np.repeat(_ids(), [2] * 79 + [13])})
     with pytest.raises(UnsupportedColumnError, match="count class.*donors"):
@@ -119,11 +122,176 @@ def test_unique_thirteen_event_donor_blocks_before_attaching_any_plan():
     assert PLAN_KEY not in events.tables[0].private.extra
 
 
-@pytest.mark.parametrize("values", [_ids(79) + ["XX-123456"],
-                                   [str(100000 + i) for i in range(79)] + ["9000000"]])
-def test_rare_id_format_or_width_donor_is_refused(values):
-    with pytest.raises(UnsupportedColumnError, match="format class|width class"):
+def test_a_count_class_with_no_held_class_leaves_the_table_out():
+    events = _file("events.csv", {"student_id": np.repeat(_ids(12), [1] * 6 + [2] * 6)})
+    with pytest.raises(UnsupportedColumnError, match="count class.*donors"):
+        _plan([events])
+    assert PLAN_KEY not in events.tables[0].private.extra
+
+
+def test_a_rare_forty_seven_row_person_is_rebalanced_with_an_exact_row_total_and_a_valid_join():
+    people = _ids(100)
+    roster = _file("roster.csv", {"student_id": people})
+    counts = [2] * 50 + [3] * 49 + [47]
+    events = _file("events.csv", {"student_id": np.repeat(people, counts)}, links=[_foreign()])
+    plans, _, _ = _plan([roster, events])
+    out = plans[("events.csv", 0)].id_values[0]
+    assert len(out) == sum(counts)
+    assert set(Counter(out).values()) <= {2, 3}
+    assert set(out) <= set(plans[("roster.csv", 0)].id_values[0])
+    assert not set(out) & set(people)
+    [message] = [m for m in events.messages if m.code == "count_classes_rebalanced"]
+    assert message.level == "info" and "47" not in message.text
+    assert not [m for m in roster.messages if m.code == "count_classes_rebalanced"]
+
+
+def test_a_rebalanced_table_with_fewer_people_keeps_the_joins_to_and_from_it():
+    people = _ids(41)
+    visits = _file("visits.csv", {"student_id": np.repeat(people, [1] * 20 + [2] + [3] * 20)})
+    notes = _file("notes.csv", {"student_id": people[20:30]},
+                  links=[_foreign(parent="visits.csv::student_id")])
+    plans, _, _ = _plan([visits, notes])
+    out = plans[("visits.csv", 0)].id_values[0]
+    assert len(out) == 20 + 2 + 60 and Counter(Counter(out).values()) == {1: 19, 3: 21}
+    assert set(plans[("notes.csv", 0)].id_values[0]) <= set(out)
+    [message] = [m for m in visits.messages if m.code == "count_classes_rebalanced"]
+    assert "1 fewer person than the source" in message.text
+
+
+@pytest.mark.parametrize("classes, rebalanced", [
+    # a single rare class: its person takes the nearest held count, the remaining rows move people up one class
+    ({2: 50, 3: 49, 47: 1}, {2: 6, 3: 94}),
+    # several rare classes go to the nearest held class; the rows are found next to them first
+    ({1: 30, 2: 30, 3: 30, 9: 1, 12: 2}, {1: 30, 2: 6, 3: 57}),
+    # a tie goes to the larger held count (as for ID widths), then one person moves down a class
+    ({2: 20, 3: 1, 4: 20, 5: 20}, {2: 20, 4: 22, 5: 19}),
+    # a tie between 1 and 3 goes to 3; no single move fits, so a person is dropped and the total met again
+    ({1: 20, 2: 1, 3: 20}, {1: 19, 3: 21}),
+    # nothing rare: unchanged
+    ({2: 20, 4: 20}, {2: 20, 4: 20}),
+])
+def test_rebalance_counts(classes, rebalanced):
+    out = _rebalance_counts(Counter(classes), 10)
+    assert out == Counter(rebalanced)
+    assert sum(k * h for k, h in out.items()) == sum(k * h for k, h in classes.items())
+    assert all(classes.get(k, 0) >= 10 for k in out)
+
+
+@pytest.mark.parametrize("classes", [
+    {1: 5, 2: 5},            # no held class
+    {2: 20, 13: 1},          # every held count is even and the row total odd
+    {4: 20, 6: 20, 3: 1},    # likewise
+])
+def test_rebalance_counts_refuses_when_no_held_class_or_no_exact_total(classes):
+    assert _rebalance_counts(Counter(classes), 10) is None
+
+
+def test_an_id_column_with_no_held_format_class_is_refused_and_named():
+    # two layouts of 9 IDs each: neither is held by --min-cell (10) people
+    values = _ids(9) + [f"S-{200000 + i * 41}" for i in range(9)]
+    with pytest.raises(UnsupportedColumnError, match="column 'student_id'.*format class"):
         _plan([_file("people.csv", {"student_id": values})])
+
+
+def test_e_mail_ids_are_still_refused():
+    with pytest.raises(UnsupportedColumnError, match="column 'student_id'.*e-mail"):
+        _plan([_file("people.csv", {"student_id": _ids(79) + ["pat.quill@example.org"]})])
+
+
+def test_rare_unpadded_id_width_is_folded_into_a_common_width():
+    values = [str(1000 + i) for i in range(70)] + [str(100000 + i) for i in range(12)] + ["9000000", "12345678"]
+    plans, _, _ = _plan([_file("people.csv", {"student_id": values})])
+    out = plans[("people.csv", 0)].id_values[0]
+    assert sorted(Counter(len(v) for v in out).items()) == [(4, 70), (6, 14)]
+    assert not set(out) & set(values)
+
+
+@pytest.mark.parametrize("widths, folded", [({4: 70, 6: 12, 7: 1, 8: 1}, {4: 70, 6: 14}),
+                                            ({4: 3, 5: 3, 6: 40}, {6: 46}),
+                                            ({4: 6, 5: 6, 6: 40}, {6: 52}),
+                                            ({4: 6, 5: 6}, {4: 6, 5: 6}),
+                                            ({4: 20, 6: 2, 8: 20}, {4: 20, 8: 22}),
+                                            ({4: 4}, {4: 4})])
+def test_fold_widths(widths, folded):
+    assert _fold_widths(Counter(widths), 10) == Counter(folded)
+
+
+# ADR-0004: a rare ID format class (a minority layout in a mixed column, a rare prefix) takes the column's most
+# common held format class instead of refusing the column.
+def _layouts(values):
+    return Counter(re.sub(r"[A-Za-z]", "A", re.sub(r"\d", "9", v)) for v in values)
+
+
+def _changes(file):
+    return [m for p in file.tables[0].columns for m in p.messages if m.code == "id_format_normalised"]
+
+
+@pytest.mark.parametrize("rare", [["XX-123456"],  # another layout entirely
+                                  ["2024-0045", "2024-0187"],  # a year-number minority
+                                  ["s123456"],  # a lower-case form
+                                  ["123456"]])  # a plain number among patterned IDs
+def test_a_rare_id_layout_is_written_in_the_held_layout(rare):
+    file = _file("people.csv", {"student_id": _ids(80) + rare})
+    plans, _, _ = _plan([file])
+    out = plans[("people.csv", 0)].id_values[0]
+    assert _layouts(out) == {"A999999": 80 + len(rare)}
+    assert not set(_normalized(out)) & set(_normalized(_ids(80) + rare))
+    assert [m.level for m in _changes(file)] == ["info"]
+
+
+def test_a_rare_prefix_within_one_layout_is_written_in_the_held_class():
+    common = [f"S{1000000 + i * 37}" for i in range(80)]
+    file = _file("people.csv", {"student_id": common + ["TX123456", "TX654321"]})
+    plans, _, _ = _plan([file])
+    out = plans[("people.csv", 0)].id_values[0]
+    assert _layouts(out) == {"A9999999": 82}
+    assert all(v.startswith("S") for v in out)
+    assert file.tables[0].columns[0].params["_id_prefix"] == "s"  # the leak scan reads usernames without it
+    assert _changes(file)
+
+
+def test_a_rare_layout_among_digit_ids_takes_the_held_digit_width():
+    values = [str(100000 + i * 37) for i in range(80)] + ["AB-1234"]
+    plans, _, _ = _plan([_file("people.csv", {"student_id": values})])
+    out = plans[("people.csv", 0)].id_values[0]
+    assert _layouts(out) == {"999999": 81}
+    assert not set(out) & set(values)
+
+
+def test_a_held_minority_layout_is_written_in_the_most_common_layout():
+    values = _ids(60) + [f"2024-{1000 + i * 7}" for i in range(20)]
+    plans, _, _ = _plan([_file("people.csv", {"student_id": values})])
+    assert _layouts(plans[("people.csv", 0)].id_values[0]) == {"A999999": 80}
+
+
+def test_a_column_with_one_layout_is_not_reported_as_normalised():
+    file = _file("people.csv", {"student_id": _ids(80)})
+    _plan([file])
+    assert not _changes(file)
+
+
+def test_joins_to_a_mixed_layout_column_stay_valid():
+    people = _ids(80) + ["2024-0045", "2024-0187", "XX-123456"]
+    roster = _file("roster.csv", {"student_id": people})
+    # the child refers to every rare-layout holder and to 40 others
+    child = people[:40] + people[80:]
+    events = _file("events.csv", {"student_id": np.repeat(child, 2)}, links=[_foreign()])
+    plans, _, _ = _plan([roster, events])
+    parent, refs = plans[("roster.csv", 0)].id_values[0], plans[("events.csv", 0)].id_values[0]
+    assert _layouts(parent) == {"A999999": 83}
+    assert _layouts(refs) == {"A999999": 86}
+    assert set(refs) <= set(parent)
+
+
+def test_a_table_holding_only_the_minority_layout_borrows_the_held_layout():
+    minority = [f"2024-{1000 + i * 7}" for i in range(12)]
+    roster = _file("roster.csv", {"student_id": _ids(80) + minority})
+    services = _file("services.csv", {"student_id": minority}, links=[_foreign()])
+    plans, _, _ = _plan([roster, services])
+    parent, refs = plans[("roster.csv", 0)].id_values[0], plans[("services.csv", 0)].id_values[0]
+    assert _layouts(refs) == {"A999999": 12}
+    assert set(refs) <= set(parent)
+    assert _changes(services)
 
 
 def test_sequential_keys_keep_set_and_shuffle_rows_and_references():

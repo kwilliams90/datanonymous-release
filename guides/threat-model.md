@@ -13,7 +13,7 @@ FERPA's disclosure determination considers multiple releases and other reasonabl
 | Released feature | Plausible disclosure | Required evaluation |
 | --- | --- | --- |
 | Values, free text, paths, headers, titles, and metadata | Names or identifiers survive outside ordinary data cells. | Scan the complete package and explicitly review schema and names. Include unusual spellings, encoded values, and container metadata. |
-| Person row counts across tables | A unique attendance, discipline, or assessment count identifies the donor after ID replacement. | Test individual counts and combined count vectors. Blur or refuse an identifying donor count; independently reassigning it is insufficient. |
+| Person row counts across tables | A unique attendance, discipline, or assessment count identifies the donor after ID replacement. | Test individual counts and combined count vectors. Rebalance a rare count class into held classes, or leave the table out; independently reassigning it is insufficient. |
 | File membership and relationships | A rare program table or family graph reveals an original person's membership. | Test fictional membership and regenerated relationships, including secondary IDs, aliases, nesting, and many-to-many joins. |
 | Categories, constants, and missingness | A rare label or exact frequency identifies a group or sensitive fact. | Count distinct primary people per fact table and assess totals, complements, rare vocabulary, and patterns together. |
 | Dates, numeric extrema, and combinations | A well-publicized event, oldest student, or unusual score links a row. | Exclude person-date source extremes and test partial matches, timelines, retained numeric facts, and public calendars. |

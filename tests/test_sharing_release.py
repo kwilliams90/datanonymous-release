@@ -200,8 +200,8 @@ def test_rare_iep_vocabulary_cannot_borrow_common_roster_holders(tmp_path):
 
 @pytest.mark.parametrize("variant, diagnostic, refused", [
     ("thirteen_events", "count class", {"events.csv"}),
-    # the rare ID's holder is in the roster and in discipline; IEP and events refer to the roster
-    ("rare_id", "format class", {"roster.csv", "discipline.csv"}),
+    # the e-mail ID's holder is in the roster and in discipline; IEP and events refer to the roster
+    ("email_id", "e-mail", {"roster.csv", "discipline.csv"}),
 ])
 def test_rare_person_count_and_identifier_shape_leave_out_only_the_offending_tables(tmp_path, variant, diagnostic,
                                                                                     refused):
@@ -225,10 +225,26 @@ def test_rare_person_count_and_identifier_shape_leave_out_only_the_offending_tab
             assert all(relation[r["Student_ID"]] == (r["State_Student_ID"], r["Family_ID"]) for r in rows)
 
 
+def test_a_rare_id_layout_is_written_in_the_held_layout_in_every_table(tmp_path):
+    # ADR-0004: the rare ID's holder (in the roster and in discipline) gets a fictional ID in the held layout
+    original, output, _, run = _execute(tmp_path, "rare_id")
+    assert run.package["released"], _diagnostic(run)
+    assert exit_code(run) == 0
+    assert set(hash_inventory(output)) == {*corpus_rows("rare_id"), *DOCS}
+    source_ids = {r["Student_ID"] for r in read_records(original / "roster.csv")}
+    written = {name: read_records(output / name) for name in corpus_rows("rare_id")}
+    ids = [r["Student_ID"] for rows in written.values() for r in rows]
+    assert {(len(i), i[0], i[1:].isdigit()) for i in ids} == {(7, "S", True)}
+    assert not set(ids) & source_ids
+    roster = {r["Student_ID"] for r in written["roster.csv"]}
+    assert len(roster) == PERSON_COUNT
+    assert all({r["Student_ID"] for r in rows} <= roster for rows in written.values())
+
+
 def test_tables_whose_join_target_is_left_out_are_planned_without_that_join(tmp_path):
-    # rare_id: the roster (the rare ID's holder) is left out. IEP and events join to it, so each keeps its rows and
-    # is planned over the IDs the remaining tables hold, whose format class no longer includes the rare holder's.
-    _, output, _, run = _execute(tmp_path, "rare_id")
+    # email_id: the roster (the e-mail ID's holder) is left out. IEP and events join to it, so each keeps its rows
+    # and is planned over the IDs the remaining tables hold.
+    _, output, _, run = _execute(tmp_path, "email_id")
     assert run.package["released"], _diagnostic(run)
     for name in ("iep.csv", "events.csv"):
         fr = next(f for f in run.files if f.rel_path == name)
@@ -250,14 +266,38 @@ def _write_csv(path: Path, rows: list[dict[str, str]]) -> None:
         writer.writerows(rows)
 
 
+def test_a_rare_rows_per_person_count_is_rebalanced_and_the_table_written(tmp_path):
+    # one person has 47 events; every other rows-per-person count (2 and 3) is held by many people (ADR-0003)
+    original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
+    original.mkdir()
+    ids = [f"S{410003 + i * 37:06d}" for i in range(100)]
+    counts = [2] * 50 + [3] * 49 + [47]
+    _write_csv(original / "roster.csv", [{"Student_ID": s, "Grade": str(6 + i % 4),
+                                          "Assessment_Score": f"{(5500 + (i * 71) % 3500) / 100:.2f}"}
+                                         for i, s in enumerate(ids)])
+    _write_csv(original / "events.csv", [{"Student_ID": s, "Event_Type": ("Review", "Checkin")[(i + e) % 2],
+                                          "Participation_Score": f"{(5000 + (i * 149 + e * 67) % 4000) / 100:.2f}"}
+                                         for i, (s, n) in enumerate(zip(ids, counts)) for e in range(n)])
+    run = execute(Settings(mode="sharing", seed=1), original, output, report)
+    assert run.package["released"] and exit_code(run) == 0, (_diagnostic(run), [f.reasons for f in run.files])
+    events = read_records(output / "events.csv")
+    assert len(events) == sum(counts)  # N exact
+    per_person = Counter(r["Student_ID"] for r in events)
+    assert set(per_person.values()) <= {2, 3}  # only held counts: no one has 47 rows
+    roster = {r["Student_ID"] for r in read_records(output / "roster.csv")}
+    assert set(per_person) <= roster and not roster & set(ids)  # the join holds among fictional people
+    assert "INFO rows per person rebalanced" in (report / "files" / "events.csv.md").read_text(encoding="utf-8")
+    assert "rebalanced" not in (report / "files" / "roster.csv.md").read_text(encoding="utf-8")
+
+
 def test_row_numbers_left_without_their_roster_are_not_kept_as_row_numbers(tmp_path):
-    # The roster's Student_ID is the row numbers 1..100 (kept as they are, D9); its rare State_Student_ID format
+    # The roster's Student_ID is the row numbers 1..100 (kept as they are, D9); an e-mail State_Student_ID
     # leaves it out. The child's 31..50 are not row numbers on their own: they get fictional IDs that are no real ID
     # of the run, and the left-out roster's 1..100 range does not show through.
     original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
     original.mkdir()
     state = [f"T{720007 + i * 41:06d}" for i in range(100)]
-    state[0] = "XX-901234"
+    state[0] = "pat.quill@example.org"
     _write_csv(original / "roster.csv", [
         {"Student_ID": str(i + 1), "State_Student_ID": state[i], "Grade": str(6 + i % 4),
          "Score": f"{(5500 + (i * 71) % 3500) / 100:.2f}"} for i in range(100)])
@@ -268,7 +308,7 @@ def test_row_numbers_left_without_their_roster_are_not_kept_as_row_numbers(tmp_p
     run = execute(Settings(mode="sharing", seed=573291), original, output, report)
     assert run.package["released"], _diagnostic(run)
     assert {f.rel_path for f in run.files if not f.written} == {"roster.csv"}
-    assert any("format class" in r for r in next(f for f in run.files if f.rel_path == "roster.csv").reasons)
+    assert any("e-mail" in r for r in next(f for f in run.files if f.rel_path == "roster.csv").reasons)
     ids = [r["Student_ID"] for r in read_records(output / "services.csv")]
     assert len(set(ids)) == 20
     assert not set(ids) & set(child_ids)
@@ -279,6 +319,77 @@ def test_row_numbers_left_without_their_roster_are_not_kept_as_row_numbers(tmp_p
             column = next(p for p in tp.columns if p.name == "Student_ID")
             assert not column.params.get("_identity_mapped"), fr.rel_path
             assert not str(column.params.get("id_mapping", "")).startswith("kept"), fr.rel_path
+
+
+def _roster_and_services(original: Path) -> None:
+    # invented: the roster's Student_ID is 1..100 (row numbers) and its Parent_Name is another person's attribute,
+    # which fails the roster after population planning; the services table holds 31..50
+    original.mkdir()
+    _write_csv(original / "roster.csv", [{"Student_ID": str(i), "Parent_Name": "Clara Qunon",
+                                          "Score": f"{i * 137 / 100:.2f}"} for i in range(1, 101)])
+    _write_csv(original / "services.csv", [{"Student_ID": str(i), "Hours": f"{i * 137 / 100:.2f}",
+                                            "Cost": f"{i * 243 / 100:.2f}"} for i in range(31, 51)])
+
+
+def test_a_roster_failing_after_planning_does_not_keep_its_row_numbers(tmp_path):
+    original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
+    _roster_and_services(original)
+    # --refuse-unsupported: Parent_Name fails the roster instead of being nulled (ADR-0001)
+    run = execute(Settings(mode="sharing", seed=573291, refuse_unsupported=True), original, output, report)
+    assert run.package["released"], _diagnostic(run)
+    roster = next(f for f in run.files if f.rel_path == "roster.csv")
+    assert not roster.written and any("Parent_Name" in r for r in roster.reasons)
+    ids = [r["Student_ID"] for r in read_records(output / "services.csv")]
+    assert len(set(ids)) == 20
+    assert not set(ids) & {str(i) for i in range(1, 101)}
+    for fr in run.files:
+        for tp in fr.tables:
+            column = next(p for p in tp.columns if p.name == "Student_ID")
+            assert not column.params.get("_identity_mapped"), fr.rel_path
+    assert not any(p.name.startswith(".sharing-staging-") for p in report.iterdir())
+
+
+def test_include_selection_satisfies_all_or_nothing(tmp_path):
+    original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
+    _roster_and_services(original)
+    run = execute(Settings(mode="sharing", seed=573291, include=["services.csv"], all_or_nothing=True),
+                  original, output, report)
+    assert run.package["released"], (_diagnostic(run), run.package)
+    assert (output / "services.csv").is_file() and not (output / "roster.csv").exists()
+
+
+def test_all_or_nothing_still_refuses_an_unsupported_input(tmp_path):
+    original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
+    _roster_and_services(original)
+    (original / "notes.docx").write_bytes(b"not a table")
+    run = execute(Settings(mode="sharing", seed=573291, include=["services.csv", "notes.docx"],
+                           all_or_nothing=True), original, output, report)
+    assert "sharing_skipped_inputs" in run.package["blocking_codes"]
+
+
+def test_too_many_labels_is_written_with_no_option_sharing_refuses(tmp_path):
+    original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
+    original.mkdir()
+    _write_csv(original / "data.csv", [{"student_id": f"S{i:04d}", "category": f"label_{i}"} for i in range(30)])
+    run = execute(Settings(mode="sharing", seed=1), original, output, report)
+    assert run.package["released"], _diagnostic(run)
+    labels = {r["category"] for r in read_records(output / "data.csv")}
+    assert not labels & {f"label_{i}" for i in range(30)}
+    fixes = " ".join(m.fix or "" for f in run.files for m in f.all_messages())
+    assert "--force-factor" not in fixes and "--org-code" not in fixes
+
+
+def test_currency_with_cents_is_written_in_its_format(tmp_path):
+    # invented amounts; the extremes were read back through the "$" format and crashed (TypeError) before
+    original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
+    original.mkdir()
+    amounts = [52000 + (i * 7919) % 30000 + (i % 100) / 100 for i in range(300)]
+    _write_csv(original / "pay.csv", [{"Student_ID": f"S{i:05d}", "Grade": str(6 + i % 4), "Amount": f"${a:,.2f}"}
+                                      for i, a in enumerate(amounts)])
+    run = execute(Settings(mode="sharing", seed=1), original, output, report)
+    assert run.package["released"], (_diagnostic(run), [f.reasons for f in run.files])
+    written = [r["Amount"] for r in read_records(output / "pay.csv")]
+    assert all(v.startswith("$") and "," in v and v[-3] == "." for v in written)
 
 
 def test_all_or_nothing_withholds_every_table_when_the_population_refuses_one(tmp_path):
@@ -306,7 +417,7 @@ def test_a_population_refusal_that_names_no_table_withholds_every_table(tmp_path
     assert all("invented run-level refusal" in r["reason"] for r in _failures(report))
 
 
-@pytest.mark.parametrize("column,actors", [
+INTRINSIC_ACTOR_ATTRIBUTES = pytest.mark.parametrize("column,actors", [
     ("Parent_Name", ["Clara O'Baxen", "Daria D'Buxen", "Elena D'Bixen"]),
     ("Guardian_Email", ["baaan@first.test", "babcn@other.test", "bacdn@other.test"]),
     ("Teacher_Name", ["Clara O'Baxen", "Daria D'Buxen", "Elena D'Bixen"]),
@@ -318,8 +429,9 @@ def test_a_population_refusal_that_names_no_table_withholds_every_table(tmp_path
     ("Teacher_Comments", ["Contact baaan@first.test", "Contact babcn@other.test", "Contact bacdn@other.test"]),
     ("Parent_Notes", ["Call 212-555-0101", "Call 312-555-0102", "Call 312-555-0103"]),
 ])
-def test_intrinsic_actor_attributes_with_many_students_withhold_the_whole_release(tmp_path, column, actors):
-    original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
+
+
+def _actor_roster(original: Path, column: str, actors: list[str]) -> list[dict[str, str]]:
     original.mkdir()
     rows = [{"Student_ID": student_id(i), column: actors[i // 20],
              "Score": f"{(5100 + i * 73) / 100:.2f}",
@@ -331,10 +443,31 @@ def test_intrinsic_actor_attributes_with_many_students_withhold_the_whole_releas
     # Each source actor reaches twenty students, yet the O' name/domain or
     # attribute value can still have exactly one statistical donor (D49).
     assert set(Counter(row[column] for row in rows).values()) == {20}
-    run = execute(Settings(mode="sharing", seed=573291), original, output, report)
+    return rows
+
+
+@INTRINSIC_ACTOR_ATTRIBUTES
+def test_intrinsic_actor_attributes_with_many_students_withhold_the_whole_release(tmp_path, column, actors):
+    # --refuse-unsupported: the old whole-file refusal (ADR-0001)
+    original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
+    _actor_roster(original, column, actors)
+    run = execute(Settings(mode="sharing", seed=573291, refuse_unsupported=True), original, output, report)
     assert not run.package["released"] and not output.exists()
     assert all(not f.written for f in run.files)
     assert any("intrinsic attribute of another person" in m.text for m in blocking_findings(run)), _diagnostic(run)
+
+
+@INTRINSIC_ACTOR_ATTRIBUTES
+def test_intrinsic_actor_attributes_are_nulled_and_appear_nowhere_in_the_output(tmp_path, column, actors):
+    # ADR-0001: by default the column is nulled and the file written
+    original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
+    _actor_roster(original, column, actors)
+    run = execute(Settings(mode="sharing", seed=573291), original, output, report)
+    assert run.package["released"] and exit_code(run) == 0, _diagnostic(run)
+    written = read_records(output / "roster.csv")
+    assert len(written) == 60 and all(row[column] == "" for row in written)
+    text = "\n".join(path.read_text(encoding="utf-8") for path in output.rglob("*") if path.is_file())
+    assert not [actor for actor in actors if actor in text]
 
 
 def test_explicit_staff_person_id_does_not_claim_an_unimplemented_actor_ownership_contract(tmp_path):
@@ -347,7 +480,7 @@ def test_explicit_staff_person_id_does_not_claim_an_unimplemented_actor_ownershi
         writer = csv.DictWriter(stream, fieldnames=list(rows[0]), lineterminator="\n")
         writer.writeheader()
         writer.writerows(rows)
-    settings = Settings(mode="sharing", seed=573291, person_id=[ColumnRef("Staff_ID")])
+    settings = Settings(mode="sharing", seed=573291, person_id=[ColumnRef("Staff_ID")], refuse_unsupported=True)
     run = execute(settings, original, output, tmp_path / "local-report")
     assert not run.package["released"] and not output.exists()
     assert any("support for that actor" in m.text for m in blocking_findings(run)), _diagnostic(run)
@@ -468,8 +601,21 @@ def test_skipped_inputs_are_logged_and_do_not_block(tmp_path):
     assert exit_code(run) == 0
     assert set(hash_inventory(output)) == {*corpus_rows(), *DOCS}
     assert [(r["input_path"], r["outcome"]) for r in _failures(report)] == [("notes.docx", "skipped")]
-    assert f"1 of {len(corpus_rows()) + 1} input files were not written" in (output / "README.md").read_text(
-        encoding="utf-8")
+    assert "were not written" not in (output / "README.md").read_text(encoding="utf-8")
+
+
+def test_an_actionable_skip_still_counts_in_the_readme_but_routine_ones_beside_it_do_not(tmp_path):
+    original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
+    write_corpus(original)
+    (original / "survey.sav").write_bytes(b"invented survey")  # a table format this release does not read
+    (original / "notes.docx").write_bytes(b"invented notes")  # routine: not a table at all
+    run = execute(Settings(mode="sharing", seed=573291), original, output, report)
+    assert run.package["released"], _diagnostic(run)
+    assert set(hash_inventory(output)) == {*corpus_rows(), *DOCS}
+    assert sorted((r["input_path"], r["outcome"]) for r in _failures(report)) == [
+        ("notes.docx", "skipped"), ("survey.sav", "skipped")]
+    readme = (output / "README.md").read_text(encoding="utf-8")
+    assert f"1 of {len(corpus_rows()) + 1} input files were not written" in readme
 
 
 def test_a_complete_run_logs_no_failures_and_says_nothing_was_left_out(canonical_release):
@@ -536,3 +682,34 @@ def test_saturated_categorical_only_tables_are_still_refused(tmp_path):
     assert not refused & set(hash_inventory(output))
     assert refused <= {r["input_path"] for r in _failures(report)}
     assert exit_code(run) == 3
+
+
+def test_a_routine_skip_alone_prints_no_were_not_written_line_but_is_still_logged(tmp_path):
+    original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
+    write_corpus(original)
+    (original / "notes.docx").write_bytes(b"invented notes")
+    result = _cli(original, "--out-dir", output, "--report-dir", report, "--seed", "573291")
+    assert result.exit_code == 0, result.output
+    assert "were not written" not in result.output and "sharing-failures.csv" not in result.output
+    assert [(r["input_path"], r["outcome"]) for r in _failures(report)] == [("notes.docx", "skipped")]
+
+
+def test_a_deselected_skip_prints_no_were_not_written_line(tmp_path):
+    original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
+    write_corpus(original)
+    (original / "broken.xlsx").write_bytes(b"invented invalid workbook")
+    result = _cli(original, "--out-dir", output, "--report-dir", report, "--seed", "573291",
+                  "--exclude-path", "broken.xlsx")
+    assert result.exit_code == 0, result.output
+    assert "were not written" not in result.output and "sharing-failures.csv" not in result.output
+
+
+def test_the_were_not_written_count_leaves_out_routine_skips(tmp_path):
+    original, output, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
+    write_corpus(original)
+    (original / "broken.xlsx").write_bytes(b"invented invalid workbook")
+    (original / "notes.docx").write_bytes(b"invented notes")
+    result = _cli(original, "--out-dir", output, "--report-dir", report, "--seed", "573291")
+    assert result.exit_code == 3, result.output
+    assert "1 input file(s) were not written to the output folder" in result.output
+    assert "2 input file(s)" not in result.output

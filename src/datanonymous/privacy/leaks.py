@@ -2677,7 +2677,7 @@ def _scan_incomplete(run: Any, payload: dict[str, bytes], exc: BaseException) ->
         if not fr.written:
             continue
         fr.fail(f"{LEAK_PREFIX}the leak scan did not complete (internal error {place}); "
-                "the output could not be verified and was removed", fix)
+                "the output could not be verified and was removed", fix, "leak_scan_incomplete")
         if out_dir is not None:
             _remove_output(out_dir, fr.out_rel_path)
         removed += 1
@@ -3007,7 +3007,8 @@ def _act(run: Any, index: SensitiveIndex, scanner: Scanner, findings: list[_Find
     for fr, reasons, fix in failures.values():
         was_written = fr.written
         for k, r in enumerate(reasons):
-            fr.fail(r, fix if k == 0 else None)
+            fr.fail(r, fix if k == 0 else None,
+                    "leak_scan_incomplete" if UNVERIFIED_TEXT in r else "real_values_in_output")
         if was_written and out_dir is not None:
             _remove_output(out_dir, fr.out_rel_path)
             removed = True

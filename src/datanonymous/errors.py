@@ -12,10 +12,15 @@ from __future__ import annotations
 class DatanonymousError(Exception):
     """Base class. ``fix`` is a short, user-facing remedy (usually a flag)."""
 
-    def __init__(self, message: str, fix: str | None = None) -> None:
+    def __init__(self, message: str, fix: str | None = None, *, code: str | None = None,
+                 column: str | None = None) -> None:
         super().__init__(message)
         self.message = message
         self.fix = fix
+        #: the message-catalogue code that explains this failure in plain language (``datanonymous.messages``),
+        #: and the column it is about; the generic ``fail`` entry covers an error without one
+        self.code = code
+        self.column = column
 
     def __str__(self) -> str:  # pragma: no cover - trivial
         return self.message
@@ -51,6 +56,22 @@ class IdSpaceError(DatanonymousError):
 
 class GenerationError(DatanonymousError):
     """Generation failed for a reason other than the ID space."""
+
+
+class ColumnRefusal(GenerationError):
+    """Sharing mode cannot protect one column (ADR-0001).
+
+    ``index`` is the column's index in its table (``column`` keeps its name) and ``plain`` the reason in plain
+    words. When the column is not a key and has no structural relationship, sharing mode writes it as a Nulled
+    column instead of leaving the file out (``profile.sharing.null_unprotectable_columns``), unless
+    ``--refuse-unsupported``.
+    """
+
+    def __init__(self, message: str, fix: str | None = None, *, index: int, plain: str, code: str | None = None,
+                 column: str | None = None) -> None:
+        super().__init__(message, fix, code=code, column=column)
+        self.index = index
+        self.plain = plain
 
 
 class WriteError(DatanonymousError):

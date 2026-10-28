@@ -1,7 +1,8 @@
 """Private generation views for sharing: local-person rare-unit suppression (D42/43).
 
-Capture evidence while raw rows exist. Never infer people from row counts or
-borrow holders from a sibling fact table or a code lookup. Source profiles and
+Capture evidence while raw rows exist. Never borrow holders from a sibling fact
+table or a code lookup. Rows count as people only within their own table, when
+it has no person column and nothing suggests repeats (ADR-0006). Source profiles and
 registries stay intact for the independent verification stage.
 """
 
@@ -17,7 +18,7 @@ import numpy as np
 
 from ..detect import dates as date_detect
 from ..detect import text as text_detect
-from ..errors import GenerationError
+from ..errors import ColumnRefusal
 from ..hints import header_hints, tokens
 from ..model import LEVEL_TYPES, NEVER_COPY_TYPES, ColumnModel, ColumnProfile, ColumnType, Message, MissingnessModel, RawTable, TableProfile
 from ..generate.quota import largest_remainder
@@ -30,6 +31,15 @@ SOURCE_COLUMN_KEY = "_sharing_source_column"
 SUPPRESSED_KEY = "_sharing_suppressed_units"
 PERSON_DATE_KEY = "_sharing_person_date"
 LOOKUP_KEY = "_sharing_lookup"
+#: evidence: {template target column: distinct people holding a filled value of it} (issue #30)
+TEMPLATE_PEOPLE_KEY = "template_people"
+#: ``ColumnProfile.params`` key (PRIVATE) of a column sharing mode rebuilds from its template's fictional inputs
+#: (their names), and the template info key that tells generation to rebuild it that way (issue #30)
+REBUILT_KEY = "_sharing_rebuilt_from"
+#: catalogue ``change`` code: a template column was rebuilt from the row's fictional values (issue #30)
+TEMPLATE_REBUILT_CODE = "template_rebuilt"
+#: ADR-0006: the table's rows were counted as its people (a utility warning: it needs attention, never blocks)
+ROWS_AS_PEOPLE_CODE = "sharing_rows_as_people"
 
 
 def _other_person_attribute(p: ColumnProfile) -> bool:
@@ -183,17 +193,255 @@ def _generation_classes(p: ColumnProfile) -> dict[Any, str]:
                             for part, kind in spans[raw]])).encode("utf-8").hex()
                 for raw, base in bases.items()}
     if p.type in date_detect.DATE_TYPES:
-        params = {k: v for k, v in p.params.items() if k not in ("sentinels", "_other_tokens")}
-        if not params.get("formats"):
-            from ..generate.dates import _params
-
-            params = _params(replace(p, params=deepcopy(params)), p.model)
+        params = _date_params(p)
         view = date_detect.view(params, [v.strip() for v in values])
         return {raw: repr((int(view.sod[i]) if view.kind == "time" else int(view.dur[i]) if view.kind == "duration"
                            else int(view.mon[i]), int(view.cls[i]), str(view.tz[i]), int(view.digits[i]),
                            raw[:len(raw) - len(raw.lstrip())], raw[len(raw.rstrip()):])).encode("utf-8").hex()
                 for i, raw in enumerate(values) if view.cls[i] >= 0}
     return {}
+
+
+def _date_params(p: ColumnProfile) -> dict[str, Any]:
+    params = {k: v for k, v in p.params.items() if k not in ("sentinels", "_other_tokens")}
+    if not params.get("formats"):
+        from ..generate.dates import _params
+
+        params = _params(replace(p, params=deepcopy(params)), p.model)
+    return params
+
+
+# --------------------------------------------------------------------------- ADR-0004: broader held classes
+#: The informational code of a column whose rare text shapes or date formats were written in a broader held class
+BROADENED_CODE = "sharing_format_broadened"
+#: Invented text whose shape is a layout, not personal information: a rare shape may climb the ladder. Names,
+#: e-mail addresses, phone numbers, addresses, cities ... keep classes defined by personal information (ADR-0004).
+_BROADENED_TEXT_TYPES = frozenset({ColumnType.FREE_TEXT, ColumnType.HIGH_CARD_CATEGORICAL, ColumnType.DIGIT_CODE})
+
+
+def _pattern(shape: str) -> str:
+    """A character mask without length detail: each run of letters of one case, or of digits, becomes one."""
+    return re.sub(r"(A)A+|(a)a+|(0)0+", lambda m: m.group(1) or m.group(2) or m.group(3), shape)
+
+
+def _text_base(p: ColumnProfile, raw: str) -> tuple:
+    """The per-value part of :func:`_generation_classes` of a value with no embedded personal data."""
+    from ..generate.text import _lead_digit
+
+    return (_shape(raw), int(p.model.nonmissing_counts[raw]), _lead_digit(raw.strip()),
+            _retained_semantics(p.type.value.lower(), raw), [])
+
+
+def _template(donor: str, base: tuple, kind: str, taken: set[str], rnd: Any) -> str | None:
+    """A made-up value of the donor's class ``base`` (shape, leading digit, retained semantics, no personal data)
+    whose case-folded text is in no ``taken``; None when none is found."""
+    from ..generate.embedded import pii_spans
+    from ..generate.text import _lead_digit
+
+    zeros = len(donor.strip()) - len(donor.strip().lstrip("0"))
+    start = len(donor) - len(donor.lstrip())
+    for _ in range(200):
+        out = []
+        for i, ch in enumerate(donor):
+            if "0" <= ch <= "9":
+                out.append("0" if i - start < zeros else rnd.choice("0123456789"))
+            elif "A" <= ch <= "Z":
+                out.append(rnd.choice("ABCDEFGHJKLMNPQRSTUVWXYZ"))
+            elif "a" <= ch <= "z":
+                out.append(rnd.choice("abcdefghjkmnpqrstuvwxyz"))
+            else:
+                out.append(ch)
+        text = "".join(out)
+        if (text.strip().casefold() not in taken and not pii_spans(text, digit_phone=True)
+                and (_shape(text), _lead_digit(text.strip()), _retained_semantics(kind, text)) == (base[0], base[2], base[3])):
+            return text
+    return None
+
+
+def _remap(model: ColumnModel, chosen: dict[Any, str], groups: dict[str, list[tuple[Any, int]]],
+           exact: bool) -> ColumnModel:
+    """``model`` with each key of ``chosen`` replaced by the new values of its group: with their own counts when
+    ``exact``, else sharing out the replaced rows in proportion to those counts."""
+    nm: dict[Any, int] = {}
+    rows: Counter = Counter()
+    for raw, count in model.nonmissing_counts.items():
+        if raw in chosen:
+            rows[chosen[raw]] += int(count)
+        else:
+            nm[raw] = nm.get(raw, 0) + int(count)
+    for key in sorted(rows):
+        values = groups.get(key) or []
+        shares = [c for _, c in values] if exact else largest_remainder([c for _, c in values], rows[key]) if values else []
+        for (value, _), share in zip(values, shares):
+            if share:
+                nm[value] = nm.get(value, 0) + int(share)
+    return replace(model, nonmissing_counts=nm)
+
+
+def _broaden_text(p: ColumnProfile, source: ColumnProfile, rare: list[str], held: dict[str, int],
+                  signatures: dict[Any, str], k: int) -> tuple[dict[Any, str], dict[str, list[tuple[str, int]]]] | None:
+    """ADR-0004 ladder for rare invented text shapes: (rare value -> its class, class -> made-up values and counts).
+
+    Each rare value moves to the first held class on the ladder: its exact class (not held, or it would not be
+    rare), then the held classes of the same pattern without leading-digit and length detail, then the column's
+    most common held class. The made-up values are of a held class exactly (shape, leading digit, retained
+    semantics and frequency), so the generator writes them in that class. None when a rare value cannot be
+    broadened: its class is defined by personal information inside it, or no held class exists.
+    """
+    import random
+
+    from ..generate.embedded import pii_spans
+
+    if p.type not in _BROADENED_TEXT_TYPES:
+        return None
+    nm = p.model.nonmissing_counts
+    groups = Counter(raw.strip().casefold() for raw in nm if isinstance(raw, str))
+
+    def plain(raw: str) -> bool:  # one spelling and no personal data inside it
+        return groups[raw.strip().casefold()] == 1 and not pii_spans(raw, digit_phone=True)
+
+    if any(pii_spans(raw, digit_phone=True) for raw in rare):
+        return None  # a class defined by personal data inside the value is never broadened
+    # ADR-0005: skew rather than refuse. A rare spelling moves with every other spelling of its value (the
+    # spellings' class is their set), each spelling taking a held class of its own.
+    moving = {raw.strip().casefold() for raw in rare}
+    rare = [raw for raw in nm if isinstance(raw, str) and raw.strip().casefold() in moving]
+    if any(pii_spans(raw, digit_phone=True) for raw in rare):
+        return None
+    targets: dict[str, tuple[int, str, tuple]] = {}  # repr(class) -> (holders, a donor value, class)
+    for raw, signature in signatures.items():
+        if raw in nm and int(held.get(signature, 0)) >= k and plain(raw):
+            base = _text_base(source, raw)
+            targets.setdefault(repr(base), (int(held[signature]), raw, base))
+    if not targets:
+        return None
+    ranked = sorted(targets, key=lambda key: (-targets[key][0], key))
+
+    def rung(raw: str) -> str:  # same pattern without leading-digit and length detail, else most common held
+        pattern = _pattern(_shape(raw))
+        return next((key for key in ranked if _pattern(targets[key][2][0]) == pattern), ranked[0])
+
+    chosen = {raw: rung(raw) for raw in rare}
+    rows: Counter = Counter()
+    for raw, key in chosen.items():
+        rows[key] += int(nm[raw])
+    taken = {raw.strip().casefold() for raw in (*nm, *source.model.nonmissing_counts) if isinstance(raw, str)}
+    rnd = random.Random(f"sharing-broaden:{p.name}:{p.index}")
+    made: dict[str, list[str]] = {}
+    counts: dict[str, int] = {}
+    for key in sorted(rows):
+        _, donor, base = targets[key]
+        count = max(1, int(base[1]))  # each made-up value keeps the held class's frequency
+        made[key] = []
+        for _ in range(int(round(rows[key] / count))):
+            value = _template(donor, base, p.type.value.lower(), taken, rnd)
+            if value is None:
+                break  # ADR-0005: the remaining rows go to the held values rather than refuse the column
+            taken.add(value.strip().casefold())
+            made[key].append(value)
+            counts[value] = count
+    # rows too few for one more value of a class's frequency go to the held values when the column is allocated
+    return chosen, {key: [(value, counts[value]) for value in values] for key, values in made.items()}
+
+
+def _broaden_dates(p: ColumnProfile, rare: list[str], held: dict[str, int], signatures: dict[Any, str],
+                   k: int) -> tuple[dict[Any, str], dict[str, list[tuple[str, int]]]] | None:
+    """ADR-0004 for dates: a value in a rare date format is written in the column's most common held format.
+
+    A format is held when a held class uses it. A rare value whose format is held (it is rare for another reason,
+    such as its month or offset), or that cannot be written in the held format keeping its date, time and offset,
+    goes to the most common held value of that format instead (ADR-0005: skew a distribution rather than refuse).
+    None when no held format exists.
+    """
+    import numpy as np
+
+    from ..generate import dates as gen_dates
+
+    params = _date_params(p)
+    values = [v for v in p.model.nonmissing_counts if isinstance(v, str)]
+    view = date_detect.view(params, [v.strip() for v in values])
+    at = {raw: i for i, raw in enumerate(values)}
+
+    def layout(i: int) -> tuple[int, int]:
+        return int(view.cls[i]), int(view.digits[i])
+
+    rows: Counter = Counter()
+    for raw, signature in signatures.items():
+        if raw in at and int(held.get(signature, 0)) >= k:
+            rows[layout(at[raw])] += int(p.model.nonmissing_counts[raw])
+    if not rows:
+        return None
+    target = min(rows, key=lambda f: (-rows[f], f))
+    # ADR-0005: a value that cannot be written in the held format keeping its date goes to the most common held
+    # value of that format instead (a skewed distribution, never a refused column)
+    fallback = max((raw for raw, signature in signatures.items() if raw in at and int(held.get(signature, 0)) >= k
+                    and layout(at[raw]) == target), key=lambda raw: (int(p.model.nonmissing_counts[raw]), raw))
+    kind = view.kind
+    profile = replace(p, params=params)
+
+    def component(v: Any, i: int) -> int:
+        return int(v.sod[i]) if kind == "time" else int(v.dur[i]) if kind == "duration" else int(v.mon[i])
+
+    chosen: dict[Any, str] = {}
+    groups: dict[str, list[tuple[str, int]]] = {}
+    for raw in rare:
+        i = at.get(raw)
+        if i is None:
+            return None
+        if layout(i) in rows:  # rare for another reason (its month, its offset): ADR-0005 skews, not refuses
+            chosen[raw] = fallback
+            groups[fallback] = [(fallback, 1)]
+            continue
+        cell = gen_dates._empty(1)
+        cell["fmt"] = target[0]
+        cell["day"] = int(view.day[i])
+        cell["us"] = int(view.dur[i]) if kind == "duration" else int(view.sod[i])
+        cell["tz"] = np.asarray([str(view.tz[i] or "")], dtype=object)
+        cell["fd"] = target[1] if target[1] >= 0 else -1
+        cell["lead"] = np.asarray([raw[:len(raw) - len(raw.lstrip())]], dtype=object)
+        cell["trail"] = np.asarray([raw[len(raw.rstrip()):]], dtype=object)
+        written = str(gen_dates.render_dates(profile, cell)[0])
+        check = date_detect.view(params, [written.strip()])
+        # the value must read back in the held format with the same date, time and offset
+        if ((int(check.cls[0]), int(check.digits[0])) != target or component(check, 0) != component(view, i)
+                or str(check.tz[0] or "") != str(view.tz[i] or "")
+                or kind in ("date", "datetime") and int(check.day[0]) != int(view.day[i])
+                or kind == "datetime" and int(check.sod[0]) != int(view.sod[i])):
+            written = fallback
+        chosen[raw] = written
+        groups[written] = [(written, 1)]
+    return chosen, groups
+
+
+def _broaden(p: ColumnProfile, source: ColumnProfile, private: Any, held: dict[str, int],
+             signatures: dict[Any, str], k: int) -> int:
+    """Move the rare text shapes or date formats of ``p`` into broader held classes (ADR-0004), in its generation
+    model and its per-entity model. Returns how many source values moved (0: none could, the column refuses)."""
+    rare = [raw for raw, signature in signatures.items()
+            if raw in p.model.nonmissing_counts and int(held.get(signature, 0)) < k]
+    if not rare:
+        return 0
+    found = (_broaden_text(p, source, rare, held, signatures, k) if _invented(p)
+             else _broaden_dates(p, rare, held, signatures, k) if p.type in date_detect.DATE_TYPES else None)
+    if found is None:
+        return 0
+    chosen, groups = found
+    before = p.model
+    p.model = _remap(p.model, chosen, groups, exact=_invented(p))
+    if p.type in date_detect.DATE_TYPES and p.params.get("formats"):
+        # a format no value is written in any more is not named in the shared schema or data dictionary either
+        def used(model: ColumnModel) -> set[int]:
+            texts = [v.strip() for v in model.nonmissing_counts if isinstance(v, str)]
+            return {int(c) for c in date_detect.view(_date_params(p), texts).cls.tolist() if c >= 0}
+
+        gone = used(before) - used(p.model)
+        p.params["formats"] = [f for i, f in enumerate(p.params["formats"]) if i not in gone]
+        if p.type is ColumnType.DATE_MIXED_FORMATS and len(p.params["formats"]) == 1:
+            p.type = ColumnType.DATE  # nor does the type say that another format existed
+    if p.index in private.entity_models:
+        private.entity_models[p.index] = _remap(private.entity_models[p.index], chosen, groups, exact=False)
+    p.flags["sharing_format_broadened"] = True
+    return len(rare)
 
 
 def _check_embedded_relationships(columns: list[ColumnProfile]) -> None:
@@ -217,7 +465,8 @@ def _check_embedded_relationships(columns: list[ColumnProfile]) -> None:
                 key = kind, part.strip().casefold()
                 previous = seen.get(key)
                 if previous and (previous[0], previous[1]) != (p.index, raw) and (embedded or previous[2]):
-                    _refuse(p, "has a repeated embedded PII relationship whose source graph cannot be safely retained")
+                    _refuse(p, "has a repeated embedded PII relationship whose source graph cannot be safely retained",
+                            "the same e-mail address, phone number or name appears in more than one place, which could link records", "sharing_repeated_embedded")
                 seen[key] = (p.index, raw, embedded or bool(previous and previous[2]))
 
 
@@ -244,14 +493,39 @@ def _units(p: ColumnProfile, raw: Any) -> list[str]:
     return []
 
 
+def _holders(keys: Any, rows_people: bool, values: Any, p: ColumnProfile, extract: Any) -> dict[str, int]:
+    """Distinct people holding each unit ``extract`` reads from ``values`` (column ``p``'s raw values): the fewest any
+    person key of the table gives, one record exported several times counting once when rows are people."""
+    held = text_detect.unit_holders(values, p, texts=extract)
+    if not held:
+        return held
+    for index in keys.keys:
+        got = text_detect.unit_holders(values, p, index, extract)
+        held = {k: min(c, got.get(k, 0)) for k, c in held.items()}
+    if rows_people and keys.table is not None:
+        # one record exported several times is one person (as for D35's rows: HolderKeys.duplicates)
+        wanted = [k for k, c in held.items() if c >= 2]
+        found = text_detect.unit_rows(values, p, wanted, extract)
+        for k, dup in keys.duplicates(p.index, values, found).items():
+            held[k] = min(held[k], dup)
+    return held
+
+
 def record_evidence(tp: TableProfile, raw: RawTable, settings: Any) -> None:
     """Capture exact local distinct-person counts after profiling, before dropping raw rows.
 
     All units count, including standard vocabulary and missing spellings. Blank
     person keys share one unknown holder through d35_keys, never one per row.
     This metadata is private and does not change source stats or public params.
+
+    ADR-0006: a table with no person key, where nothing suggests that a person
+    has several rows (``HolderKeys.rows_people``), counts each row as a person,
+    rows identical in every column once (``HolderKeys.duplicates``), and says so
+    (:data:`ROWS_AS_PEOPLE_CODE`). These counts stay in this table: nothing
+    pools them over the run.
     """
     keys = entity.d35_keys(raw, tp.columns, tp.entity, settings)
+    rows_people = not keys.people and keys.rows_people
     counts: dict[int, dict[str, int]] = {}
     classes: dict[int, dict[str, int]] = {}
     numbers: dict[int, dict[str, int]] = {}
@@ -297,17 +571,35 @@ def record_evidence(tp: TableProfile, raw: RawTable, settings: Any) -> None:
             return [key] if key is not None else []
 
         for destination, extract in ((counts, units), (classes, signature), (numbers, numeric), (date_buckets, date_bucket)):
-            held = text_detect.unit_holders(counted_values, p, texts=extract)
-            if not held:
-                continue
-            for index in keys.keys:
-                got = text_detect.unit_holders(counted_values, p, index, extract)
-                held = {k: min(c, got.get(k, 0)) for k, c in held.items()}
-            destination[p.index] = held
+            held = _holders(keys, rows_people, counted_values, p, extract)
+            if held:
+                destination[p.index] = held
+    # issue #30: how many people hold a filled value of each column a template builds (the template's shape)
+    template_people: dict[int, int] = {}
+    for info in tp.structure.private.get("templates", ()):
+        p = tp.columns[int(info["target"])]
+        if p.model is None or p.role in ("excluded", "null", "id"):
+            continue
+        missing = frozenset(v for v in p.model.missing_counts if isinstance(v, str))
+
+        def filled(v: Any, missing: frozenset = missing) -> list[str]:
+            return ["t:filled"] if isinstance(v, str) and v.strip() and v not in missing else []
+
+        held = _holders(keys, rows_people, raw.columns[p.index].values, p, filled)
+        template_people[p.index] = max(held.values(), default=0)
+    people = bool(keys.people or rows_people)
     one_per_person = bool(keys.people and keys.keys and all(len(np.unique(k)) == raw.n_rows for k in keys.keys))
-    tp.private.extra[EVIDENCE_KEY] = {"people": bool(keys.people), "counts": counts, "classes": classes, "numbers": numbers,
-                                      "date_buckets": date_buckets if keys.people else {},
-                                      "one_row_per_person": one_per_person}
+    tp.private.extra[EVIDENCE_KEY] = {"people": people, "rows_as_people": rows_people, "counts": counts,
+                                      "classes": classes, "numbers": numbers,
+                                      "date_buckets": date_buckets if people else {},
+                                      "one_row_per_person": one_per_person,
+                                      TEMPLATE_PEOPLE_KEY: template_people if people else {}}
+    if rows_people and (counts or classes or numbers or date_buckets):
+        tp.messages.append(Message(
+            "warning", ROWS_AS_PEOPLE_CODE,
+            "no column says which person each row belongs to and nothing suggests that a person has several rows, "
+            "so each row was counted as a different person (ADR-0006)",
+            fix="if someone can have several rows, name their ID column with --person-id"))
 
 
 def _clone_model(model: ColumnModel | None) -> ColumnModel | None:
@@ -322,9 +614,15 @@ def _clone_model(model: ColumnModel | None) -> ColumnModel | None:
     return replace(model, nonmissing_counts=dict(model.nonmissing_counts), missing_counts=dict(model.missing_counts), extra=extra)
 
 
-def _refuse(p: ColumnProfile, reason: str) -> None:
-    raise GenerationError(f"sharing mode: column {p.name!r} {reason}",
-                          fix=f"--null {p.name} or --exclude {p.name}; use --person-id COL when a column identifies the row's person")
+#: Plain reasons (ADR-0001: the report says why a column was nulled)
+_NO_PEOPLE = "no column says which person each row belongs to, so sharing mode cannot count how many people share its values"
+_TIED = "it is tied to another column by a key, dependency, template or rule that cannot be regenerated safely"
+
+
+def _refuse(p: ColumnProfile, reason: str, plain: str, code: str) -> None:
+    raise ColumnRefusal(f"sharing mode: column {p.name!r} {reason}",
+                        fix=f"--null {p.name} or --exclude {p.name}; use --person-id COL when a column identifies the row's person",
+                        code=code, column=p.name, index=p.index, plain=plain)
 
 
 def _rescale(counts: dict[Any, int], n: int) -> dict[Any, int]:
@@ -343,7 +641,8 @@ def _protect_model(p: ColumnProfile, model: ColumnModel, rare: set[str]) -> Colu
             continue
         nm[raw] += int(count)
     if not nm and not missing and model.n_nonmissing + model.n_missing:
-        _refuse(p, "has no category or missing value supported by enough distinct people in this table")
+        _refuse(p, "has no category or missing value supported by enough distinct people in this table",
+                "too few people share each of its values to keep any of them", "sharing_no_support")
     total = model.n_nonmissing + model.n_missing
     # Suppressed units get zero rows. Reassign their mass within the same
     # missing/nonmissing group, or to the only remaining supported group.
@@ -353,24 +652,47 @@ def _protect_model(p: ColumnProfile, model: ColumnModel, rare: set[str]) -> Colu
                    missing_counts=_rescale(missing, missing_target))
 
 
-def _related_columns(tp: TableProfile, *, composite: bool = True) -> set[int]:
-    """Columns whose source relationship could restore suppressed units."""
+def in_table_links(tp: TableProfile, *, live: bool = True) -> list[tuple[str, int, tuple[int, ...]]]:
+    """The relationships of ``tp`` that stay inside the table (ADR-0001 amendment), as (kind, dependent column,
+    the columns it depends on): ``dependency`` (a functional dependency: the dependent is fixed by one column) and
+    ``template`` (the dependent is built from its inputs). Nulling a column in one breaks no join; only the pattern
+    is lost. ``live``: only the relationships none of whose columns is nulled or excluded, the ones generation would
+    still keep (a column nulled by sharing mode is profiled again as nulled, which finds none of its relationships)."""
+    names = {p.name: p.index for p in tp.columns}
+    out: list[tuple[str, int, tuple[int, ...]]] = []
+    for fd in tp.structure.private.get("fds", ()):
+        if "det" in fd and "dep" in fd:
+            out.append(("dependency", int(fd["dep"]), (int(fd["det"]),)))
+    for entry in tp.structure.private.get("templates", ()):
+        out.append(("template", int(entry["target"]),
+                    tuple(dict.fromkeys(int(part[1]) for part in entry.get("parts", ()) if part[0] == "f"))))
+    for entry in tp.structure.derived_templates:  # found but not applied too: the source pattern is still there
+        if entry.get("column") in names:
+            out.append(("template", names[entry["column"]],
+                        tuple(names[name] for name in entry.get("inputs", ()) if name in names)))
+    seen: set[tuple[str, int, frozenset[int]]] = set()
+    links = []
+    for kind, dependent, inputs in out:
+        key = kind, dependent, frozenset(inputs)
+        if key in seen or (live and any(tp.columns[i].role in ("null", "excluded") for i in (dependent, *inputs))):
+            continue
+        seen.add(key)
+        links.append((kind, dependent, inputs))
+    return links
+
+
+def _related_columns(tp: TableProfile, *, composite: bool = True, in_table: bool = True) -> set[int]:
+    """Columns whose source relationship could restore suppressed units. ``in_table``: with the relationships that
+    stay inside the table (:func:`in_table_links`); without them, the ones nulling a column would break: composite
+    keys and declared rules."""
     names = {p.name: p.index for p in tp.columns}
     involved: set[int] = set()
-    for fd in tp.structure.private.get("fds", ()):
-        involved.update(int(fd[k]) for k in ("det", "dep") if k in fd)
+    if in_table:
+        for _, dependent, inputs in in_table_links(tp):
+            involved.update((dependent, *inputs))
     if composite:
         for key in tp.structure.private.get("composite", ()):
             involved.update(int(i) for i in key.get("cols", ()))
-    for entry in tp.structure.derived_templates:
-        if entry.get("column") in names:
-            involved.add(names[entry["column"]])
-        for name in entry.get("inputs", ()):
-            if name in names:
-                involved.add(names[name])
-    for entry in tp.structure.private.get("templates", ()):
-        involved.add(int(entry["target"]))
-        involved.update(int(part[1]) for part in entry.get("parts", ()) if part[0] == "f")
     for target, entry in tp.structure.private.get("rule_targets", {}).items():
         involved.add(int(target))
         involved.update(int(member[0]) for member in entry.get("members", ()))
@@ -437,7 +759,8 @@ def _check_native_storage(p: ColumnProfile) -> None:
         classes = {(kind, formats.get(kind) or "General") for kind, count in (native.get("types") or {}).items()
                    if count > 0}
     if len(classes) > 1:
-        _refuse(p, "has mixed Excel cell types or number formats without distinct-person support for their retained quotas")
+        _refuse(p, "has mixed Excel cell types or number formats without distinct-person support for their retained quotas",
+                "its cells mix Excel cell types or number formats that too few people share", "sharing_mixed_cell_types")
 
 
 def _trim_params(p: ColumnProfile, rare: set[str]) -> None:
@@ -460,17 +783,79 @@ def _trim_params(p: ColumnProfile, rare: set[str]) -> None:
             p.params.pop(key)
 
 
-def _structural_contracts(tp: TableProfile, dates: set[int]) -> None:
+def _fictional_input(p: ColumnProfile) -> bool:
+    """A column sharing mode always writes with fictional values: a minted ID, or generated person names."""
+    return p.role == "id" or (p.role in ("row", "entity") and p.type is ColumnType.PERSON_NAME)
+
+
+def _rebuildable_templates(tp: TableProfile, evidence: dict[str, Any], k: int) -> dict[int, dict[str, Any]]:
+    """Issue #30: the applied templates of ``tp`` (target column -> template info) whose target sharing mode can write
+    by applying the template to the row's written values instead of protecting (or nulling) it. All of:
+
+    * the target is an e-mail column (not a key) and every input is fictional in the output (:func:`_fictional_input`:
+      minted IDs, generated names), never a real value;
+    * every literal part is one the generator writes anyway: separators (a fixed public list) and the domain, which
+      is always the generator's one fictional reserved domain, never a real one (``generate.structure``). A free
+      digit run copies the source's digit-run lengths, so a template with one is not rebuilt;
+    * the template's shape is held by at least ``k`` distinct people (every filled value has it).
+
+    Any other template keeps today's protection (its target is refused and nulled; the link is reported lost)."""
+    if not evidence.get("people"):
+        return {}
+    people = evidence.get(TEMPLATE_PEOPLE_KEY) or {}
+    out: dict[int, dict[str, Any]] = {}
+    for info in tp.structure.private.get("templates", ()):
+        t = int(info["target"])
+        target = tp.columns[t]
+        parts = info.get("parts", ())
+        inputs = [int(part[1]) for part in parts if part[0] == "f"]
+        if (target.type is not ColumnType.EMAIL or target.role not in ("row", "entity") or not info.get("email")
+                or target.params.get("id_candidate") or not inputs or t in inputs
+                or any(part[0] not in ("f", "s") for part in parts)
+                or not all(_fictional_input(tp.columns[i]) for i in inputs)
+                or int(people.get(t, 0)) < k):
+            continue
+        out[t] = info
+    return out
+
+
+def _rebuild_template(out: TableProfile, info: dict[str, Any], p: ColumnProfile) -> None:
+    """Make generation write column ``p`` of the protected table ``out`` from template ``info`` (its copy in ``out``)
+    applied to the row's fictional values (issue #30): one fictional reserved domain, no source value groups, and a
+    row the template cannot fill safely written empty (``generate.structure``)."""
+    info[REBUILT_KEY] = True
+    info.pop("groups", None)  # the source's distinct/frequency grouping is not kept
+    info.pop("lossy", None)
+    if info.get("domains"):
+        # the generator's first fictional domain (never a real one: profile.templates.reserved_domains); the number
+        # of distinct source domains and their shares are not kept
+        info["domains"] = [(info["domains"][0][0], sum(int(c) for _, c in info["domains"]))]
+    names = [out.columns[i].name for i in dict.fromkeys(int(part[1]) for part in info["parts"] if part[0] == "f")]
+    p.params[REBUILT_KEY] = tuple(names)
+    p.params["_template_profile"] = "rebuilt from the row's fictional values in sharing mode"
+    out.messages.append(Message("info", TEMPLATE_REBUILT_CODE,
+                                f"{p.name} was rebuilt from the fictional {_names(names)} written in each row",
+                                column=p.name))
+
+
+def _structural_contracts(tp: TableProfile, dates: set[int], rebuilt: frozenset[int] = frozenset()) -> None:
     sensitive = {p.index for p in tp.columns if p.role == "id" or _invented(p)} | dates
+    dropped = {p.index for p in tp.columns if p.role in ("null", "excluded")}  # their relationships are not kept
     for fd in tp.structure.private.get("fds", ()):
+        if dropped.intersection((fd["det"], fd["dep"])):
+            continue
         if not fd.get("overridden") and sensitive.intersection((fd["det"], fd["dep"])):
-            _refuse(tp.columns[fd["dep"]], "has a source person dependency that cannot preserve fictional relationships")
+            _refuse(tp.columns[fd["dep"]], "has a source person dependency that cannot preserve fictional relationships", _TIED, "sharing_person_dependency")
     # A template's source grouping carries the original distinct/frequency
     # relationship even after its input labels become fictional.
     for template in tp.structure.private.get("templates", ()):
+        if dropped.intersection({template["target"]} | {part[1] for part in template.get("parts", ()) if part[0] == "f"}):
+            continue
+        if template["target"] in rebuilt:  # written from the row's fictional values only (issue #30)
+            continue
         if template.get("groups") or sensitive.intersection(
                 {template["target"]} | {part[1] for part in template.get("parts", ()) if part[0] == "f"}):
-            _refuse(tp.columns[template["target"]], "has a source template relationship that cannot be safely regenerated")
+            _refuse(tp.columns[template["target"]], "has a source template relationship that cannot be safely regenerated", _TIED, "sharing_source_template")
 
 
 def verify_values(profile: ColumnProfile, values: Any) -> list[Message]:
@@ -531,6 +916,9 @@ def protect_profile(tp: TableProfile, settings: Any) -> TableProfile:
                   columns=columns, private=private, structure=structure, messages=list(tp.messages))
     related = _related_columns(tp)
     value_contracts = _related_columns(tp, composite=False)
+    # issue #30: columns written by applying their template to the row's fictional values; none of their own values
+    # is generated, so their value layouts are not protected (only their missing-value spellings)
+    rebuilt = {t: info for t, info in _rebuildable_templates(tp, evidence, k).items() if not lookup}
     changed: set[int] = set()
     person_dates: set[int] = set()
     _check_embedded_relationships(columns)
@@ -541,23 +929,23 @@ def protect_profile(tp: TableProfile, settings: Any) -> TableProfile:
         if p.model is None or p.role == "id":
             continue
         if p.model.n_nonmissing and _other_person_attribute(p):
-            raise GenerationError(
+            raise ColumnRefusal(
                 f"sharing mode: column {p.name!r} contains an intrinsic attribute of another person; "
                 "distinct-person support for that actor has not been established",
-                fix=f"--null {p.name} or --exclude {p.name}",
+                fix=f"--null {p.name} or --exclude {p.name}", code="sharing_other_person_attribute", column=p.name, index=p.index,
+                plain="it describes another person (such as a parent or teacher), and sharing mode cannot count "
+                      "how many of those people share each value",
             )
         source = tp.columns[p.index]
         p.model.extra[SOURCE_COLUMN_KEY] = source
         requested = {u for raw in (*source.model.nonmissing_counts, *source.model.missing_counts) for u in _units(source, raw)} | _native_units(source)
         held = (evidence.get("counts") or {}).get(p.index, {})
         if requested and not lookup and not evidence.get("people"):
-            _refuse(p, "cannot establish distinct-person support for its categories or missing values")
+            _refuse(p, "cannot establish distinct-person support for its categories or missing values", _NO_PEOPLE, "sharing_no_people")
         rare = {u for u in requested if int(held.get(u, 0)) < k} if not lookup else set()
         if rare:
-            if p.type in (ColumnType.NUMERIC_FORMATTED, ColumnType.NUMERIC_WITH_TOKENS, ColumnType.DECIMAL) and any(u.startswith("n:") for u in rare):
-                _refuse(p, "has a rare discrete numeric value that interpolation can restore")
-            if p.index in related:
-                _refuse(p, "has rare units in a structural key, dependency or rule that cannot be safely regenerated")
+            if p.index in related and p.index not in rebuilt:
+                _refuse(p, "has rare units in a structural key, dependency or rule that cannot be safely regenerated", _TIED, "sharing_rare_in_structure")
             p.model = _protect_model(source, p.model, rare)
             if p.index in private.entity_models:
                 private.entity_models[p.index] = _protect_model(source, private.entity_models[p.index], rare)
@@ -570,11 +958,14 @@ def protect_profile(tp: TableProfile, settings: Any) -> TableProfile:
                 p.params["mode"] = "combinations"
             changed.add(p.index)
             p.flags["sharing_rare_units_suppressed"] = True
+            if p.type in (ColumnType.NUMERIC_FORMATTED, ColumnType.NUMERIC_WITH_TOKENS, ColumnType.DECIMAL) and any(u.startswith("n:") for u in rare):
+                # ADR-0002: same suppression as plain discrete numbers; generated by quota over the kept values, in the column's format
+                p.params[sharing_numeric.LEVELS_KEY] = True
         if not lookup and p.type in sharing_numeric.TYPES and p.model.n_nonmissing:
             if not evidence.get("people"):
-                _refuse(p, "cannot establish distinct-person support for its numeric measures")
+                _refuse(p, "cannot establish distinct-person support for its numeric measures", _NO_PEOPLE, "sharing_no_people")
             if p.index in related:
-                _refuse(p, "has numeric extrema in a structural contract that cannot be safely regenerated")
+                _refuse(p, "has numeric extrema in a structural contract that cannot be safely regenerated", _TIED, "sharing_numeric_structure")
             number_holders = (evidence.get("numbers") or {}).get(p.index, {})
             forbidden = frozenset(key for key in sharing_numeric.source_extremes(source)
                                   if int(number_holders.get("n:" + key, 0)) < k)
@@ -605,7 +996,7 @@ def protect_profile(tp: TableProfile, settings: Any) -> TableProfile:
             p.params[PERSON_DATE_KEY] = True
             p.params["_no_exact_extremes"] = True
             if p.index in value_contracts:
-                _refuse(p, "has a protected person date in a structural contract that cannot be safely regenerated")
+                _refuse(p, "has a protected person date in a structural contract that cannot be safely regenerated", _TIED, "sharing_date_structure")
             from ..generate.sharing_dates import normalized_keys, source_extremes
 
             missing = list(source.model.missing_counts)
@@ -617,15 +1008,32 @@ def protect_profile(tp: TableProfile, settings: Any) -> TableProfile:
                 if p.index in private.entity_models:
                     private.entity_models[p.index] = _protect_model(source, private.entity_models[p.index], date_missing)
                 changed.add(p.index)
+        if p.index in rebuilt:
+            _rebuild_template(out, next(info for info in structure.private["templates"]
+                                        if int(info["target"]) == p.index), p)
+            continue
         if not lookup and p.model.n_nonmissing and (_invented(p) or p.type in date_detect.DATE_TYPES):
             if not evidence.get("people"):
-                _refuse(p, "cannot establish distinct-person support for its retained date, text or PII classes")
+                _refuse(p, "cannot establish distinct-person support for its retained date, text or PII classes", _NO_PEOPLE, "sharing_no_people")
             signatures = _generation_classes(source)
             held_classes = (evidence.get("classes") or {}).get(p.index, {})
+            moved = _broaden(p, source, private, held_classes, signatures, k)
+            if moved:
+                # every class the generator now writes must be held by itself, as before
+                signatures = _generation_classes(replace(source, model=p.model, params=p.params))
+                out.messages.append(Message(
+                    "info", BROADENED_CODE,
+                    f"{moved} value(s) of column {p.name!r} had a "
+                    + ("date format, month or offset" if p.type in date_detect.DATE_TYPES else "layout")
+                    + " too few people share, so they were written in "
+                    + ("the column's most common held date format" if p.type in date_detect.DATE_TYPES
+                       else "a broader layout that enough people share"),
+                    column=p.name))
             if any(int(held_classes.get(signature, 0)) < k for raw, signature in signatures.items()
                    if raw in p.model.nonmissing_counts):
-                _refuse(p, "has a date, text or PII format/frequency class supported by fewer than the required distinct people")
-    _structural_contracts(out, person_dates)
+                _refuse(p, "has a date, text or PII format/frequency class supported by fewer than the required distinct people",
+                        "some of its value layouts are shared by too few people", "sharing_rare_class")
+    _structural_contracts(out, person_dates, frozenset(rebuilt))
     # Source joint missingness can identify one pattern donor even when every
     # marginal is common. Only independent protected marginals survive.
     structure.missingness = _independent_missingness(columns, tp.n_rows)
@@ -635,4 +1043,330 @@ def protect_profile(tp: TableProfile, settings: Any) -> TableProfile:
     return out
 
 
-__all__ = ["record_evidence", "protect_profile", "verify_values", "EVIDENCE_KEY", "SOURCE_MODEL_KEY", "SUPPRESSED_KEY", "PERSON_DATE_KEY", "LOOKUP_KEY"]
+#: The warning a column nulled by sharing mode carries (utility: it releases nothing real, ADR-0001)
+AUTO_NULL_CODE = "column_nulled_automatically"
+#: ``ColumnProfile.source`` of a column sharing mode nulled (``--null`` sets ``null``)
+AUTO_NULL_SOURCE = "auto-null"
+#: ``ColumnProfile.params`` key (PRIVATE) of what the operator can do instead of an automatic null
+AUTO_NULL_ALTERNATIVE_KEY = "_null_alternative"
+
+
+def key_or_related(tp: TableProfile, index: int) -> bool:
+    """A key (ID column, alias, nesting, a column holding another ID column's keys) or a column in a structural
+    relationship that reaches past its own values (join, composite key, declared rule): nulling it would break what the
+    synthetic copy exists to keep, so its refusal still leaves the file out (ADR-0001). A relationship that stays inside
+    the table (:func:`in_table_links`: a dependency, a template) does not make a column one: nulling it breaks no join,
+    it only loses the pattern (ADR-0001 amendment, :func:`lost_links`)."""
+    from .entity import FLAGGED_ID_KEY
+
+    p = tp.columns[index]
+    ent = tp.entity
+    if p.role == "id" or index in ent.id_columns or index == ent.primary:
+        return True
+    if any(index in group for group in ent.aliases):
+        return True
+    if any(p.name in (n.get("child"), n.get("parent")) for n in ent.nesting):
+        return True
+    if any(p.params.get(key) for key in ("_key_ref", "_key_ref_list", FLAGGED_ID_KEY)):
+        return True
+    return index in _related_columns(tp, in_table=False)
+
+
+def catalogue_fix(code: str | None) -> str | None:
+    """The catalogue's fix for ``code`` as plain text (no code spans), or None when it has none that stands alone."""
+    from ..messages import lookup
+
+    entry = lookup(code) if code else None
+    if entry is None or not entry.fix or "{text}" in entry.fix:
+        return None
+    return entry.fix.replace("`", "")
+
+
+def null_column(tp: TableProfile, index: int, reason: str, *, automatic: bool = True,
+                alternative: str | None = None) -> ColumnProfile:
+    """Turn column ``index`` of ``tp`` into a Nulled column, the way ``--null`` does: header and position kept,
+    every cell written missing, and its real values recorded as dropped (``privacy.texts.DROPPED_KEY``) so no
+    generator writes one and the leak scan looks for them. ``reason`` is the plain reason; ``automatic`` says
+    sharing mode (not the operator) nulled it, which the column records and reports as a utility warning.
+    ``alternative`` is the fix that belongs to the reason (the catalogue's fix of the refusal); an ID-like column
+    gets the ID-specific one instead.
+    Returns the new column profile (it replaces the old one in ``tp.columns``)."""
+    from ..hints import DEFAULT_NA_TOKENS
+    from ..privacy import texts as real_texts
+
+    old = tp.columns[index]
+    values = [*old.model.nonmissing_counts, *old.model.missing_counts] if old.model is not None else []
+    dropped = {v.strip() for v in values if isinstance(v, str)} - {""} - set(DEFAULT_NA_TOKENS)
+    extra = tp.private.extra
+    extra[real_texts.DROPPED_KEY] = {**(extra.get(real_texts.DROPPED_KEY) or {}), index: frozenset(dropped)}
+    if old.type is ColumnType.PHONE or header_hints(old.name).pii == "phone":
+        extra["_dropped_phone_columns"] = frozenset(extra.get("_dropped_phone_columns") or ()) | {index}
+    extra.pop("_leak_dropped_digit_terms", None)  # privacy.leaks caches the dropped columns' digit terms
+    new = ColumnProfile(index=index, name=old.name, type=ColumnType.EMPTY, role="null", na_tokens=old.na_tokens,
+                        source="null", reason=f"--null: written as all-missing because {reason}",
+                        model=ColumnModel(), stats={"n": tp.n_rows}, native=old.native)
+    new.flags["nulled_automatically"] = automatic
+    if automatic:
+        # an ID-like column (D7 candidate) may be an ID the operator can declare instead (ADR-0001)
+        mark_auto_nulled(new, reason, _id_alternative(old.name) if old.params.get("id_candidate") else alternative,
+                         lost_links(tp, index))
+    tp.columns[index] = new
+    if old.params.get("id_candidate") and not any(p.params.get("id_candidate") for p in tp.columns):
+        # the table's ID-like candidates (D7) were all nulled: none of their real values is written any more
+        tp.messages = [m for m in tp.messages if m.code != "id_candidates"]
+        tp.messages = [Message("info", "no_id_column", "no ID column matched; each row is its own entity (D7)")
+                       if m.code == "no_id_column" else m for m in tp.messages]
+    ent = tp.entity
+    if index in ent.constant_columns:
+        ent.constant_columns = [i for i in ent.constant_columns if i != index]
+    ent.constant_shares.pop(index, None)
+    tp.private.entity_models.pop(index, None)
+    return new
+
+
+def _names(names: list[str]) -> str:
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+
+
+def lost_links(tp: TableProfile, index: int) -> tuple[str, ...]:
+    """The plain text of each relationship inside ``tp`` (:func:`in_table_links`) that is no longer kept once column
+    ``index`` is nulled, for "What changed" (ADR-0001 amendment)."""
+    names = [p.name for p in tp.columns]
+    out = []
+    for kind, dependent, inputs in in_table_links(tp, live=False):
+        if index != dependent and index not in inputs:
+            continue
+        if kind == "dependency":
+            out.append(f"the link between {names[inputs[0]]} and {names[dependent]} is not kept")
+        else:
+            out.append(f"{names[dependent]} is no longer built from {_names([names[i] for i in inputs])}")
+    return tuple(dict.fromkeys(out))
+
+
+def with_lost_links(tp: TableProfile, index: int, request: tuple) -> tuple:
+    """A null request (plain reason, alternative) for column ``index`` of ``tp``, with the relationships nulling it
+    loses (:func:`lost_links`) as its third item; a column nulled already keeps the ones it recorded."""
+    reason, alternative = request[0], request[1] if len(request) > 1 else None
+    recorded = tp.columns[index].params.get(LOST_LINKS_KEY)
+    return reason, alternative, tuple(recorded) if recorded is not None else lost_links(tp, index)
+
+
+#: catalogue ``change`` code: a relationship inside the table is not kept because one of its columns was nulled
+LINK_NOT_KEPT_CODE = "link_not_kept"
+#: ``ColumnProfile.params`` key (PRIVATE) of the relationships a column nulled by sharing mode lost
+LOST_LINKS_KEY = "_lost_links"
+
+
+def mark_auto_nulled(p: ColumnProfile, reason: str, alternative: str | None = None,
+                     links: tuple[str, ...] = ()) -> None:
+    """Label the Nulled column ``p`` as nulled by sharing mode (ADR-0001), not by the operator: its source, its plain
+    ``reason``, and the utility warning that reports it. ``alternative`` is what the operator can do instead to keep
+    the column (for an ID-like column: declare it as an ID), shown with it in the report. ``links``: the plain text
+    of each relationship inside the table that nulling it lost (:func:`lost_links`), reported as a change."""
+    p.params[LOST_LINKS_KEY] = tuple(links)
+    for text in links:
+        p.messages.append(Message("info", LINK_NOT_KEPT_CODE, text, column=p.name))
+    p.source = AUTO_NULL_SOURCE
+    p.reason = f"nulled automatically: written as all-missing because {reason}"
+    p.flags["nulled_automatically"] = True
+    if alternative:
+        p.params[AUTO_NULL_ALTERNATIVE_KEY] = alternative
+    if alternative and "--exclude" in alternative:
+        instead = alternative.rstrip(". ")
+    else:
+        instead = (alternative + "; " if alternative else "") + f"--exclude {p.name} drops the column instead"
+    p.messages.append(Message(
+        "warning", AUTO_NULL_CODE,
+        f"column {p.name!r} was nulled automatically (written with every cell empty) because {reason}",
+        column=p.name, fix=f"{instead}; --refuse-unsupported leaves the file out instead"))
+
+
+#: findings about whole rows or the whole file: nulling a column never answers them, so they still withhold the file
+_ROW_OR_FILE_CODES = ("row_matches_", "leak_scan_incomplete")
+#: findings that a non-key column looks like an ID or an ID-like code (``id_candidates`` and ``no_id_column`` name
+#: the table's candidate columns, ``params['id_candidate']``; ``possible_sparse_code`` is the column's own)
+_ID_LIKE_CODES = ("id_candidates", "no_id_column", "possible_sparse_code")
+
+
+def _id_alternative(name: str) -> str:
+    """What the operator can do instead of nulling the ID-like column ``name``: declare it as an ID."""
+    return (f"if it is an ID, declare it with --id-col {name} to get synthetic IDs (--person-id {name} when it is "
+            "the ID of the row's own person)")
+
+
+def _post_generation_reason(name: str, codes: list[str]) -> tuple[str, str | None]:
+    """(plain reason, alternative) for a column nulled because of the blocking findings ``codes`` about it."""
+    if any(code in _ID_LIKE_CODES for code in codes):
+        return ("it looks like an ID or a code number but is not used as a key, so its real values could not be "
+                "shared as ordinary numbers or labels", _id_alternative(name))
+    from ..messages import lookup
+
+    entry = lookup(codes[0])
+    found = f" ({entry.sentence.rstrip('.')})" if entry is not None and "{text}" not in entry.sentence else ""
+    return f"a privacy check of the generated file found a problem with it{found}", catalogue_fix(codes[0])
+
+
+def column_scoped_findings(fr: Any, finding_category: Any) -> dict[int, dict[int, tuple[str, str | None]]] | None:
+    """ADR-0001, second trigger: when every blocking finding (``finding_category``) of the generated file ``fr`` is
+    about one or more columns that are not keys, not in a structural relationship and not nulled already, the
+    columns to null before generating the file again, as {table number: {column index: (plain reason,
+    alternative)}}; else None (the file is withheld as before).
+
+    A finding about whole rows or the whole file (``row_matches_*``, an incomplete leak scan, any finding that names
+    no column) is not scoped to a column. A finding on a column already nulled is one that nulling did not clear: the
+    file is withheld, so the rounds of nulling end."""
+    targets: dict[tuple[int, int], list[str]] = {}
+
+    def add(t_i: int, index: int, code: str) -> bool:
+        tp = fr.tables[t_i]
+        if tp.columns[index].role in ("null", "excluded") or key_or_related(tp, index):
+            return False
+        targets.setdefault((t_i, index), []).append(code)
+        return True
+
+    def scoped(message: Message) -> bool:
+        return not message.code.startswith(_ROW_OR_FILE_CODES)
+
+    def blocking(messages: Any) -> list[Message]:
+        return [m for m in messages if finding_category(m) == "blocking"]
+
+    for message in blocking(fr.messages):
+        hits = [(t_i, p.index) for t_i, tp in enumerate(fr.tables) for p in tp.columns if p.name == message.column]
+        if not scoped(message) or not message.column or len(hits) != 1 or not add(*hits[0], message.code):
+            return None
+    for t_i, tp in enumerate(fr.tables):
+        for message in blocking(tp.messages):
+            if not scoped(message):
+                return None
+            if message.code in ("id_candidates", "no_id_column") and not message.column:
+                hits = [p.index for p in tp.columns if p.params.get("id_candidate")]
+            else:
+                hits = [p.index for p in tp.columns if message.column and p.name == message.column]
+                hits = hits if len(hits) == 1 else []
+            if not hits or not all(add(t_i, i, message.code) for i in hits):
+                return None
+        for p in tp.columns:
+            for message in blocking(p.messages):
+                if not scoped(message) or not add(t_i, p.index, message.code):
+                    return None
+    if not targets:
+        return None
+    out: dict[int, dict[int, tuple[str, str | None]]] = {}
+    for (t_i, index), codes in sorted(targets.items()):
+        out.setdefault(t_i, {})[index] = _post_generation_reason(fr.tables[t_i].columns[index].name, codes)
+    return out
+
+
+def generation_null_targets(tp: TableProfile, findings: list[Message]) -> dict[int, tuple[str, str | None]] | None:
+    """ADR-0001, findings made while table ``tp`` was generated (a ``verify_values`` error, a leak-scan hit): when
+    every one names exactly one column of ``tp`` that is not a key, not in a structural relationship and not nulled
+    already, the columns to null before generating again, as {column index: (plain reason, alternative)}; else None
+    (the file is left out as before). A finding about whole rows or the whole file (one that names no column, a row
+    match, an incomplete leak scan) is not scoped to a column."""
+    codes: dict[int, list[str]] = {}
+    for message in findings:
+        hits = [p.index for p in tp.columns if message.column and p.name == message.column]
+        if message.code.startswith(_ROW_OR_FILE_CODES) or len(hits) != 1:
+            return None
+        index = hits[0]
+        if tp.columns[index].role in ("null", "excluded") or key_or_related(tp, index):
+            return None
+        codes.setdefault(index, []).append(message.code)
+    return {index: _post_generation_reason(tp.columns[index].name, found)
+            for index, found in sorted(codes.items())} or None
+
+
+#: ``TablePrivate.extra`` key: the deliberate changes protection made to each column (see :func:`change_records`)
+CHANGES_KEY = "sharing_changes"
+
+
+def change_records(protected: TableProfile) -> list[tuple[str, str, int]]:
+    """(column name, kind, count) of each deliberate change :func:`protect_profile` made, for "What changed".
+
+    Kinds: ``dates`` (a person date was shifted), ``categories`` (rare categories merged into common ones; count =
+    categories), ``blanks`` (rare missing-value spellings merged; count = spellings) and ``numeric`` (rare numeric
+    extremes removed). Read from the protected copy, because the source profile carries none of this."""
+    out: list[tuple[str, str, int]] = []
+    for p in protected.columns:
+        if p.role in ("excluded", "null"):
+            continue
+        if p.params.get(PERSON_DATE_KEY):
+            out.append((p.name, "dates", 0))
+        elif p.flags.get("sharing_rare_units_suppressed") and p.model is not None:
+            units = p.model.extra.get(SUPPRESSED_KEY, ())
+            # a unit is "u:" (a level), "n:" (a number), "c:" (a multi-select combination), "m:" (a missing spelling) or
+            # "v:" (the exact spelling of one of those, not a second thing)
+            categories = (sum(1 for u in units if u[:2] in ("u:", "n:"))
+                          or sum(1 for u in units if u.startswith("c:")))
+            blanks = sum(1 for u in units if u.startswith("m:"))
+            if categories:
+                out.append((p.name, "categories", categories))
+            if blanks:
+                out.append((p.name, "blanks", blanks))
+        if p.flags.get("sharing_numeric_extremes_removed"):
+            out.append((p.name, "numeric", 0))
+    return out
+
+
+#: refusals raised because a column is in a structural relationship (not because of its own values alone)
+_IN_STRUCTURE_CODES = frozenset({"sharing_rare_in_structure", "sharing_numeric_structure", "sharing_date_structure",
+                                 "sharing_person_dependency", "sharing_source_template"})
+
+
+def _nullable_dependents(tp: TableProfile, index: int) -> list[int]:
+    """The columns that depend on column ``index`` through a live relationship inside the table (the dependent of a
+    dependency it fixes, a column a template builds from it) and that may be nulled: not keys, not in a relationship
+    nulling would break."""
+    found = dict.fromkeys(dependent for _, dependent, inputs in in_table_links(tp) if index in inputs)
+    return [d for d in found if d != index and not key_or_related(tp, d)]
+
+
+def _link_partners(tp: TableProfile, index: int) -> list[str]:
+    """The names of the other columns of the live relationships inside the table that column ``index`` is in."""
+    partners = [i for _, dependent, inputs in in_table_links(tp) if index == dependent or index in inputs
+                for i in (dependent, *inputs) if i != index]
+    return [tp.columns[i].name for i in dict.fromkeys(partners)]
+
+
+def null_unprotectable_columns(tp: TableProfile, settings: Any) -> list[str]:
+    """ADR-0001: null every column whose protection refuses (:class:`ColumnRefusal`) and that is not a key or in a
+    structural relationship, until the table's profile can be protected. Returns the nulled columns' names.
+
+    A relationship inside the table (a dependency, a template) does not stop it (ADR-0001 amendment). When a column is
+    refused because of such a relationship, the side that depends on it is nulled instead (the dependent of a
+    dependency, the column a template builds), when it is nullable: the relationship goes, and the column itself is
+    protected like any other. The relationships nulling loses are reported (:func:`lost_links`).
+
+    A refusal on a key or relationship column, or any other error, stops here: the file is left out when it is
+    generated, with today's reason."""
+    nulled: list[str] = []
+    while True:
+        try:
+            protect_profile(tp, settings)
+        except ColumnRefusal as refusal:
+            i = refusal.index
+            if not (0 <= i < len(tp.columns)) or tp.columns[i].role in ("null", "excluded") or key_or_related(tp, i):
+                return nulled
+            dependents = _nullable_dependents(tp, i) if refusal.code in _IN_STRUCTURE_CODES else []
+            for d in dependents:
+                null_column(tp, d, f"keeping its link with {tp.columns[i].name} could expose values of "
+                                   f"{tp.columns[i].name} that cannot be shared safely",
+                            automatic=True, alternative=None)
+                nulled.append(tp.columns[d].name)
+            if dependents:
+                continue
+            partners = _link_partners(tp, i) if refusal.code in _IN_STRUCTURE_CODES else []
+            reason = (f"it is tied to {_names(partners)} by a link inside the table that cannot be kept safely"
+                      if partners else refusal.plain)
+            null_column(tp, i, reason, automatic=True, alternative=catalogue_fix(refusal.code))
+            nulled.append(tp.columns[i].name)
+        except Exception:  # noqa: BLE001 - generation reports it for the file (D19)
+            return nulled
+        else:
+            return nulled
+
+
+__all__ = ["record_evidence", "protect_profile", "ROWS_AS_PEOPLE_CODE", "verify_values", "null_column", "null_unprotectable_columns",
+           "mark_auto_nulled", "column_scoped_findings", "AUTO_NULL_CODE", "AUTO_NULL_ALTERNATIVE_KEY", "AUTO_NULL_SOURCE", "EVIDENCE_KEY", "SOURCE_MODEL_KEY", "SUPPRESSED_KEY", "PERSON_DATE_KEY", "LOOKUP_KEY", "CHANGES_KEY", "change_records",
+           "in_table_links", "lost_links", "with_lost_links", "LINK_NOT_KEPT_CODE", "LOST_LINKS_KEY",
+           "TEMPLATE_PEOPLE_KEY", "REBUILT_KEY", "TEMPLATE_REBUILT_CODE"]

@@ -3,17 +3,20 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from decimal import Decimal
 from typing import Any
 
 import numpy as np
 
-from ..errors import GenerationError
+from ..errors import ColumnRefusal
 from ..model import ColumnModel, ColumnProfile, ColumnType as T
 from .numeric import exact_value
 from .quota import largest_remainder
 
 TYPES = frozenset({T.INTEGER, T.INTEGER_YEAR, T.FLOAT, T.DECIMAL, T.NUMERIC_FORMATTED,
                    T.NUMERIC_WITH_TOKENS, T.LAT, T.LON})
+from .numeric import LEVELS_KEY  # noqa: E402
+
 MARKER = "_sharing_numeric_extremes"
 FORBIDDEN_KEY = "_sharing_forbidden_numeric_extremes"
 
@@ -25,7 +28,10 @@ def discrete(profile: ColumnProfile) -> bool:
 
 
 def normalized_key(profile: ColumnProfile, raw: Any) -> str | None:
-    value = exact_value(raw, profile)
+    # an already parsed value is not read again through the column's format ($, %, grouping), which it lacks
+    value = raw if isinstance(raw, Decimal) else exact_value(raw, profile)
+    if value is not None and not value.is_finite():
+        return None
     if value is None:
         return None
     if not value:
@@ -56,8 +62,9 @@ def forbidden_extremes(profile: ColumnProfile) -> frozenset[str]:
 
 
 def _refuse(profile: ColumnProfile) -> None:
-    raise GenerationError(f"sharing mode: column {profile.name!r} has no feasible numeric support after removing unsupported original extrema",
-                          fix=f"--null {profile.name} or --exclude {profile.name}")
+    raise ColumnRefusal(f"sharing mode: column {profile.name!r} has no feasible numeric support after removing unsupported original extrema",
+                        fix=f"--null {profile.name} or --exclude {profile.name}", code="sharing_numeric_no_support", column=profile.name, index=profile.index,
+                        plain="once its highest and lowest values, which too few people hold, are removed, no values are left to generate from")
 
 
 def protect_model(profile: ColumnProfile, model: ColumnModel, forbidden: frozenset[str]) -> ColumnModel:
@@ -87,4 +94,4 @@ def protect_model(profile: ColumnProfile, model: ColumnModel, forbidden: frozens
     return replace(model, nonmissing_counts=nonmissing, missing_counts=missing, sorted_numeric=np.sort(xs))
 
 
-__all__ = ["TYPES", "MARKER", "FORBIDDEN_KEY", "discrete", "normalized_key", "source_extremes", "forbidden_extremes", "protect_model"]
+__all__ = ["TYPES", "LEVELS_KEY", "MARKER", "FORBIDDEN_KEY", "discrete", "normalized_key", "source_extremes", "forbidden_extremes", "protect_model"]

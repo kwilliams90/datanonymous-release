@@ -455,9 +455,13 @@ def write_docs(out_dir: Path, written: list[WrittenFile], run_messages: list[Mes
 
 
 def not_written_count(run: Any) -> tuple[int, int]:
-    """(input files not written, input files found): every FAILed file and every skipped file of the run."""
-    skipped = len(getattr(run, "skipped", ()))  # an older run object may have none
-    return (sum(1 for fr in run.files if fr.failed) + skipped, len(run.files) + skipped)
+    """(input files not written, input files found): every FAILed file and every actionable skipped file of the run.
+
+    Routine (non-table) and deselected skips are not left out of the output on a problem, so they are not counted
+    (the same rule as the console line); they still count as found only when actionable."""
+    skipped = list(getattr(run, "skipped", ()))  # an older run object may have none
+    actionable = sum(1 for s in skipped if not (getattr(s, "routine", False) or getattr(s, "deselected", False)))
+    return (sum(1 for fr in run.files if fr.failed) + actionable, len(run.files) + actionable)
 
 
 def rewrite_docs(run: Any, min_cell: int) -> dict[str, str]:
@@ -757,6 +761,9 @@ def _sharing_readme(files: list[tuple[FileResult, list[_DocTable]]], names: dict
         lines += ["", f"**{missing} of {found} input files were not written** to this folder (they could not be "
                   "generated safely, or are not supported tables). Fictional keys and joins hold only among "
                   "the files in this folder."]
+    changed = _changed_lines(files)
+    if changed:
+        lines += ["", "## What changed", "", "Deliberate changes that make these files differ from real data:", ""] + changed
     lines += [
         "", "## Sharing contract", "",
         "- Each released table keeps its row total: N output equals N input. Safe paths, headers, column "
@@ -788,6 +795,19 @@ def _sharing_readme(files: list[tuple[FileResult, list[_DocTable]]], names: dict
         "not automatic FERPA approval.", "",
     ]
     return "\n".join(lines)
+
+
+def _changed_lines(files: list[tuple[FileResult, list[_DocTable]]]) -> list[str]:
+    """The transformations visible in the output, one bullet each: no counts, reasons or source facts."""
+    from .changes import file_changes
+
+    out = []
+    for fr, _ in files:
+        if fr.withheld:
+            continue
+        for column, text in file_changes(fr, counts=False):
+            out.append(f"- {_md(_code(fr.out_rel_path))}" + (f" {_md(_code(column))}" if column else "") + f": {text}")
+    return out
 
 
 def _faker_version() -> str:

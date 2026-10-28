@@ -1,0 +1,3 @@
+# One rare-value rule for every discrete numeric column, whatever its formatting
+
+Sharing mode used to suppress rare values in plain discrete integers (moving those rows onto values held by enough people), but refused the whole column when the same values were written as currency, with grouping separators, with a suffix or as a zero-scale decimal. We now protect every discrete numeric the same way: parse it, apply the same rare-value suppression and extreme removal as plain numbers, generate, then render the result in the column's own format (symbol, grouping, decimals, parenthesised negatives, suffix). The formatting carries no extra information about people, so treating it differently only made formatted columns fail where plain ones succeeded.

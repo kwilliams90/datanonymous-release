@@ -176,6 +176,7 @@ from __future__ import annotations
 import dataclasses
 import os
 import secrets
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -184,7 +185,7 @@ from . import diagnostics, paths
 from .config import Settings, validate
 from .detect import dates as dates_detect
 from .discover import check_dirs, default_report_dir, discover
-from .errors import DatanonymousError, NotTabular, UsageError
+from .errors import ColumnRefusal, DatanonymousError, GenerationError, NotTabular, UsageError
 from .generate import numeric as numeric_gen
 from .generate import pii, pseudonyms
 from .generate.ids import IdRegistry
@@ -230,7 +231,7 @@ def _internal_failure(fr: FileResult, run: RunResult, exc: BaseException, stage:
     # Never print the exception's text anywhere (report, console, -v traceback): its message, arguments, notes and
     # chained exceptions may quote a real value, and a read error comes before any index could redact it (R7-04)
     fr.fail(f"internal error during {stage} ({diagnostics.error_place(exc)})",
-            "re-run with -v to see the traceback, and report it")
+            "re-run with -v to see the traceback, and report it", code="internal_error")
     run.debug.append(f"{fr.rel_path}: " + diagnostics.safe_traceback(exc))
 
 
@@ -257,7 +258,7 @@ def profile_file(f: DiscoveredFile, settings: Settings, run: RunResult,
         fr.messages.extend(rr.messages)
         for t_i, t in enumerate(rr.tables):
             fr.tables.append(profile_table(t, f.rel_path, f.format, settings, (key_refs or {}).get(t_i),
-                                           defer_d35=True))
+                                           defer_d35=True, auto_null=f.auto_null.get(t_i)))
             if settings.mode == "sharing":
                 from .profile.sharing import record_evidence
 
@@ -266,11 +267,11 @@ def profile_file(f: DiscoveredFile, settings: Settings, run: RunResult,
     except UsageError:
         raise
     except NotTabular as e:
-        run.skipped.append(SkippedFile(f.rel_path, e.message))
+        run.skipped.append(SkippedFile(f.rel_path, e.message, code="skipped_not_a_table"))
         return None
     except DatanonymousError as e:
         fr.tables = []
-        fr.fail(e.message, e.fix)
+        fr.fail(e.message, e.fix, e.code, e.column)
     except Exception as e:  # noqa: BLE001 - per-file isolation (D19)
         fr.tables = []
         _internal_failure(fr, run, e, "reading/profiling")
@@ -317,11 +318,13 @@ def plan_key_refs(run: RunResult, files: dict[str, DiscoveredFile], settings: Se
                         for tp in fr.tables for p in tp.columns if p.params.get("_key_ref_list")})
         if stuck and not fr.failed:
             fr.fail(f"column(s) {', '.join(stuck)} hold the real IDs of an ID column but could not be treated as "
-                    "ID columns; the file is not written", "--id-col " + " --id-col ".join(stuck))
+                    "ID columns; the file is not written", "--id-col " + " --id-col ".join(stuck),
+                    code="unlinked_key_column")
         if lists and not fr.failed:
             fr.fail(f"column(s) {', '.join(lists)} hold lists of the real IDs of an ID column, which would be "
                     "written as they are; the file is not written",
-                    " ".join(f"--force-text {c}" for c in lists) + " (invented labels), or --null / --exclude")
+                    " ".join(f"--force-text {c}" for c in lists) + " (invented labels), or --null / --exclude",
+                    code="unlinked_key_column")
     return msgs
 
 
@@ -401,7 +404,7 @@ def plan_ids(files: list[FileResult], seed: int, settings: Settings | None = Non
         members = {m[0] for m in ns.members}
         for fr in files:
             if fr.rel_path in members and not fr.failed:
-                fr.fail(ns.error.message, ns.error.fix)
+                fr.fail(ns.error.message, ns.error.fix, ns.error.code, ns.error.column)
     return reg, namespaces
 
 
@@ -501,10 +504,61 @@ def _first_rows(entity_index: np.ndarray | None, n_entities: int) -> np.ndarray 
     return first
 
 
+def _request_null_after_refusal(fr: FileResult, settings: Settings, run: RunResult, t_i: int | None,
+                                refusal: GenerationError) -> None:
+    """ADR-0001, a refusal raised while table ``t_i`` of ``fr`` was generated (a :class:`ColumnRefusal`, or another
+    :class:`GenerationError` that names one column): when its column is not a key, not in a structural relationship
+    and not nulled already, record a null request (``RunResult.null_requests``), so ``execute`` profiles and
+    generates the whole run again with the column nulled, as for a column-scoped finding. Otherwise (or with
+    ``--refuse-unsupported``) nothing is recorded and the file is left out, as before."""
+    if settings.mode != "sharing" or settings.refuse_unsupported or t_i is None or not refusal.column:
+        return
+    from .profile.sharing import catalogue_fix, key_or_related
+
+    tp = fr.tables[t_i]
+    if isinstance(refusal, ColumnRefusal):
+        i, plain = refusal.index, refusal.plain
+        if not (0 <= i < len(tp.columns)) or tp.columns[i].name != refusal.column:
+            return
+    else:
+        hits = [p.index for p in tp.columns if p.name == refusal.column]
+        if len(hits) != 1:
+            return
+        i, plain = hits[0], "its synthetic values could not be generated"
+    if tp.columns[i].role in ("null", "excluded") or key_or_related(tp, i):
+        return
+    run.null_requests.setdefault(fr.rel_path, {}).setdefault(t_i, {})[i] = (plain, catalogue_fix(refusal.code))
+
+
+def _request_nulls_for_findings(fr: FileResult, settings: Settings, run: RunResult,
+                                findings: dict[int, list[Message]]) -> None:
+    """ADR-0001, the blocking findings made while ``fr`` was generated ({table number: messages}: ``verify_values``
+    errors, leak-scan hits): when every one is about one column that is not a key, not in a structural relationship
+    and not nulled already (``profile.sharing.generation_null_targets``), record null requests for those columns, so
+    ``execute`` generates the whole run again with them nulled. Otherwise (or with ``--refuse-unsupported``) nothing
+    is recorded and the file is left out, as before."""
+    if settings.mode != "sharing" or settings.refuse_unsupported or not findings:
+        return
+    from .profile.sharing import generation_null_targets
+
+    targets = {t_i: generation_null_targets(fr.tables[t_i], messages) for t_i, messages in findings.items()}
+    if any(columns is None for columns in targets.values()):
+        return
+    for t_i, columns in targets.items():
+        run.null_requests.setdefault(fr.rel_path, {}).setdefault(t_i, {}).update(columns)
+
+
 def generate_file(fr: FileResult, settings: Settings, run: RunResult, reg: IdRegistry,
                   namespaces: dict[tuple[str, int], dict[int, str]]) -> docs.WrittenFile | None:
-    """Pass 2 for one file: generate, protect, write, self-check. Returns docs input or None."""
+    """Pass 2 for one file: generate, protect, write, self-check. Returns docs input or None.
+
+    A :class:`ColumnRefusal` (or another :class:`GenerationError` naming one column) raised while a table is
+    generated, a ``verify_values`` error or a leak-scan hit leaves the file out of this attempt; in sharing mode a
+    non-key column they are all about is requested nulled for the next one (:func:`_request_null_after_refusal`,
+    :func:`_request_nulls_for_findings`)."""
     assert run.out_dir is not None and fr.layout is not None
+    generating: int | None = None
+    findings: dict[int, list[Message]] = {}  # blocking findings made while values were generated, by table
     dest = run.out_dir / Path(*fr.out_rel_path.split("/"))
     tmp = dest.with_name(dest.name + TMP_SUFFIX)
     try:
@@ -512,12 +566,17 @@ def generate_file(fr: FileResult, settings: Settings, run: RunResult, reg: IdReg
         out_handler = registry.output_handler(fr.format)
         synth: list[SyntheticTable] = []
         for t_i, tp in enumerate(fr.tables):
+            generating = t_i
             ctx = GenContext(run.seed, fr.rel_path, reg, namespaces.get((fr.rel_path, t_i), {}), settings)
             generation_profile = tp
             if settings.mode == "sharing":
-                from .profile.sharing import protect_profile
+                from .profile.sharing import CHANGES_KEY, change_records, protect_profile
 
                 generation_profile = protect_profile(tp, settings)
+                tp.private.extra[CHANGES_KEY] = change_records(generation_profile)
+                # the deliberate changes protection made (ADR-0004 broader classes) are reported with the table
+                tp.messages.extend(m for m in generation_profile.messages[len(tp.messages):]
+                                   if m.level == "info" and m not in tp.messages)
             st = generate_table(generation_profile, ctx)
             generated_profile = st.profile
             priv = matches.enforce(generated_profile, st, stream(run.seed, fr.rel_path, tp.name or "", "__privacy__"),
@@ -532,15 +591,19 @@ def generate_file(fr: FileResult, settings: Settings, run: RunResult, reg: IdReg
 
                 for column in st.columns:
                     for message in verify_values(st.profile.columns[column.index], column.values):
-                        fr.fail(message.text, message.fix)
+                        findings.setdefault(t_i, []).append(message)
+                        fr.fail(message.text, message.fix, message.code, message.column)
             for column in st.columns:
                 # Every generation/privacy repair has finished. Writers render
                 # copies and never mutate these final synthetic column arrays.
                 column.values.flags.writeable = False
             for m in leaks.scan_table(tp, st):
-                fr.fail(m.text + (f" (column {m.column})" if m.column else ""), m.fix)
+                findings.setdefault(t_i, []).append(m)
+                fr.fail(m.text + (f" (column {m.column})" if m.column else ""), m.fix, m.code, m.column)
             synth.append(st)
+        generating = None
         if fr.failed:
+            _request_nulls_for_findings(fr, settings, run, findings)
             return None
         out_tables = [OutTable(st.name, st.header, [c.values for c in st.columns], [c.index for c in st.columns],
                                st.n_rows, dict(st.profile.layout), st.profile) for st in synth]
@@ -595,9 +658,11 @@ def generate_file(fr: FileResult, settings: Settings, run: RunResult, reg: IdReg
                     from .profile.sharing import verify_values
 
                     for message in verify_values(p, values):
-                        fr.fail(message.text, message.fix)
+                        findings.setdefault(t_i, []).append(message)
+                        fr.fail(message.text, message.fix, message.code, message.column)
                     if fr.failed:
                         dest.unlink(missing_ok=True)
+                        _request_nulls_for_findings(fr, settings, run, findings)
                         return None
                 coded = codes_of(values)
                 counts = counts_of(values)
@@ -659,14 +724,20 @@ def generate_file(fr: FileResult, settings: Settings, run: RunResult, reg: IdReg
             dtypes.append(dt)
             fr.out_dtypes.append(dt)
             src_dt = fr.source_dtypes[t_i] if t_i < len(fr.source_dtypes) else None
-            for text in selfcheck.dtype_messages(src_dt, dt, st.header):
-                fr.messages.append(Message("warning", "dtype_mismatch", text))
+            for column, text in selfcheck.dtype_drift(src_dt, dt, st.header):
+                fr.messages.append(Message("warning", "dtype_mismatch", text, column=column))
         return docs.WrittenFile(fr, synth, fr.synthetic_stats, dtypes)
+    except GenerationError as e:
+        tmp.unlink(missing_ok=True)
+        if fr.written:
+            dest.unlink(missing_ok=True)
+        _request_null_after_refusal(fr, settings, run, generating, e)
+        fr.fail(e.message, e.fix, e.code, e.column)
     except DatanonymousError as e:
         tmp.unlink(missing_ok=True)
         if fr.written:  # D19: a file that FAILs after its output was moved into place is not written either
             dest.unlink(missing_ok=True)
-        fr.fail(e.message, e.fix)
+        fr.fail(e.message, e.fix, e.code, e.column)
     except Exception as e:  # noqa: BLE001 - per-file isolation (D19)
         tmp.unlink(missing_ok=True)
         if fr.written:
@@ -676,8 +747,16 @@ def generate_file(fr: FileResult, settings: Settings, run: RunResult, reg: IdReg
 
 
 def _execute(settings: Settings, input_path: Path, out_dir: Path | None = None, report_dir: Path | None = None,
-             mode: str = "run", *, _dirs_checked: bool = False) -> RunResult:
-    """Run (``mode='run'``) or inspect (``mode='inspect'``) and return the RunResult."""
+             mode: str = "run", *, _dirs_checked: bool = False,
+             _left_out: dict[str, FileResult] | None = None,
+             _auto_null: dict[str, dict[int, dict[int, tuple[str, str | None]]]] | None = None) -> RunResult:
+    """Run (``mode='run'``) or inspect (``mode='inspect'``) and return the RunResult.
+
+    ``_left_out`` (sharing): files an earlier attempt planned but could not write; they FAIL right after
+    profiling, with the earlier reason, so every plan is made over the files written. ``_auto_null`` (sharing,
+    ADR-0001): the columns earlier attempts found column-scoped blocking findings about after generation
+    (``RunResult.null_requests``); they are profiled as Nulled columns, so every plan sees them as nulled.
+    """
     input_path = Path(input_path)
     if mode == "run":
         if out_dir is None:
@@ -698,8 +777,14 @@ def _execute(settings: Settings, input_path: Path, out_dir: Path | None = None, 
                     report_dir=report_dir if mode == "run" else None, seed=seed, seed_was_random=was_random,
                     skipped=list(disc.skipped), messages=list(disc.messages), data_mode=settings.mode)
     for f in disc.files:
+        f.auto_null = (_auto_null or {}).get(f.rel_path, {})
         fr = profile_file(f, settings, run)
         if fr is not None:
+            if _left_out and fr.rel_path in _left_out and not fr.failed:
+                earlier = _left_out[fr.rel_path]
+                reason = earlier.reasons[0] if earlier.reasons else "not written in an earlier attempt"
+                fr.fail(reason, earlier.fixes[0] if earlier.fixes else None,
+                        next((m.code for m in earlier.messages if m.level == "error" and m.text == reason), None))
             run.files.append(fr)
     if disc.files and not run.files:
         run.messages.append(Message("warning", "no_tabular_files", "no supported tabular files found in the input"))
@@ -707,6 +792,26 @@ def _execute(settings: Settings, input_path: Path, out_dir: Path | None = None, 
         run.messages.append(Message("warning", "unused_column_flag", f"column reference {ref!r} matched no column"))
     run.messages.extend(plan_key_refs(run, {f.rel_path: f for f in disc.files}, settings))
     fail_unrecognised_keys(run.files)  # D38: once the key discovery has made every ID column it can
+    if settings.mode == "sharing" and mode == "run" and not settings.refuse_unsupported:
+        from .profile.sharing import AUTO_NULL_ALTERNATIVE_KEY, AUTO_NULL_SOURCE, null_unprotectable_columns
+
+        # ADR-0001: a non-key column sharing mode cannot protect is nulled the way --null does it: the run is profiled
+        # again from the start with the column nulled (``_auto_null``), so every profile-time record (the row-match
+        # keys, D35 holders, structure) and every run-wide plan (real texts, IDs, pseudonyms, population) sees it as
+        # nulled. Nothing of this attempt is planned or written.
+        for fr in run.files:
+            if fr.failed:
+                continue
+            for t_i, tp in enumerate(fr.tables):
+                null_unprotectable_columns(tp, settings)
+                before = (_auto_null or {}).get(fr.rel_path, {}).get(t_i, {})
+                for p in tp.columns:
+                    if p.source == AUTO_NULL_SOURCE and p.index not in before:
+                        reason = p.reason.split(" because ", 1)[1] if " because " in p.reason else p.reason
+                        run.null_requests.setdefault(fr.rel_path, {}).setdefault(t_i, {})[p.index] = (
+                            reason, p.params.get(AUTO_NULL_ALTERNATIVE_KEY))
+        if run.null_requests:
+            return run
     # R9-01: the run's real person IDs (every ID column of every file, FAILed and flagged ones too), which no value
     # written verbatim may equal, whatever the key discovery inferred
     ids = real_ids.plan(run.files)
@@ -752,7 +857,7 @@ def _execute(settings: Settings, input_path: Path, out_dir: Path | None = None, 
                     for fr in run.files:
                         error = next((e for (path, _), e in refusal.refused.items() if path == fr.rel_path), None)
                         if error is not None:
-                            fr.fail(error.message, error.fix)
+                            fr.fail(error.message, error.fix, error.code, error.column)
                     continue
                 error = refusal
             except DatanonymousError as caught:  # a refusal no table answers for: nothing is planned
@@ -772,8 +877,9 @@ def _execute(settings: Settings, input_path: Path, out_dir: Path | None = None, 
                 break
             for fr in run.files:
                 if not fr.failed:
-                    fr.fail(error.message, error.fix)
+                    fr.fail(error.message, error.fix, error.code, error.column)
             break
+    planned = {fr.rel_path for fr in run.files if not fr.failed}
     out_dir.mkdir(parents=True, exist_ok=True)
     written: list[docs.WrittenFile] = []
     for fr in run.files:
@@ -782,11 +888,23 @@ def _execute(settings: Settings, input_path: Path, out_dir: Path | None = None, 
         w = generate_file(fr, settings, run, reg, namespaces)
         if w is not None:
             written.append(w)
+    if settings.mode == "sharing" and not settings.refuse_unsupported:
+        from .privacy.sharing_policy import finding_category
+        from .profile.sharing import column_scoped_findings
+
+        # ADR-0001: a written file whose only blocking findings are about non-key columns is generated again (same
+        # seed) with those columns nulled; any other finding still withholds it (below, and in package.finish)
+        for fr in run.files:
+            if fr.written and not fr.withheld:
+                scoped = column_scoped_findings(fr, finding_category)
+                if scoped:
+                    run.null_requests[fr.rel_path] = scoped
     if settings.mode == "sharing" and not settings.all_or_nothing:
         from .privacy import package
 
         # a file whose findings block sharing is left out before the docs describe the output
         written = package.withhold_blocked(run, out_dir, written)
+    run.late_failures = [fr for fr in run.files if fr.failed and fr.rel_path in planned]
     stale_files = stale_outputs(run.files, out_dir)
     for fr in stale_files:
         run.messages.append(Message(
@@ -814,10 +932,15 @@ def execute(settings: Settings, input_path: Path, out_dir: Path | None = None, r
     """Sharing writes the verified files to the output folder and leaves out (and lists in the report folder's
     sharing-failures.csv) the ones that cannot be written safely; fidelity retains local workflow."""
     validate(settings)
+    if mode == "run":
+        from . import rundirs
+
+        out_dir, report_dir = rundirs.resolve(settings, Path(input_path), out_dir, report_dir)
+        if out_dir is None:
+            raise UsageError("--out-dir is required",
+                             fix="pass --out-dir, or set output_root and report_root in a config file")
     if settings.mode != "sharing" or mode != "run":
         return _execute(settings, input_path, out_dir, report_dir, mode)
-    if out_dir is None:
-        raise UsageError("--out-dir is required")
     from .privacy import package
 
     destination = Path(out_dir)
@@ -826,8 +949,47 @@ def execute(settings: Settings, input_path: Path, out_dir: Path | None = None, r
         raise UsageError(f"input not found: {input_path}")
     check_dirs(Path(input_path), destination, local_report, False, sharing=True)
     package.check_fresh_destination(destination)
-    stage = package.create_staging(local_report)
-    run = _execute(settings, input_path, stage, local_report, mode, _dirs_checked=True)
+    left_out: dict[str, FileResult] = {}
+    auto_null: dict[str, dict[int, dict[int, tuple[str, str | None]]]] = {}
+    was_random = False
+    while True:
+        stage = package.create_staging(local_report)
+        run = _execute(settings, input_path, stage, local_report, mode, _dirs_checked=True, _left_out=left_out,
+                       _auto_null=auto_null)
+        requests = run.null_requests
+        if not requests and (settings.all_or_nothing or not run.late_failures):
+            break
+        shutil.rmtree(stage)
+        # ADR-0001: columns whose blocking findings were their file's only ones are nulled and the whole run planned
+        # and written again (same seed), so every run-wide plan sees them as nulled. Each attempt nulls columns not
+        # nulled before (a finding on a column already nulled withholds its file), so the attempts end.
+        from .profile.sharing import with_lost_links
+
+        by_path = {fr.rel_path: fr for fr in run.files}
+        for path, tables in requests.items():
+            for t_i, columns in tables.items():
+                # the relationships inside the table each nulled column loses, read before the next attempt's profile
+                # finds none of them (ADR-0001 amendment)
+                tp = by_path[path].tables[t_i] if path in by_path and t_i < len(by_path[path].tables) else None
+                auto_null.setdefault(path, {}).setdefault(t_i, {}).update(
+                    (i, with_lost_links(tp, i, request) if tp is not None and i < len(tp.columns) else request)
+                    for i, request in columns.items())
+        # a file left out after planning: plan and write the others again without it (same seed), so no plan
+        # (the row numbers 1..n kept, D9; the real texts it would have written) assumes it was written
+        if not settings.all_or_nothing:
+            left_out.update((fr.rel_path, fr) for fr in run.late_failures if fr.rel_path not in requests)
+        if settings.seed is None:
+            settings = dataclasses.replace(settings, seed=run.seed)
+            was_random = True
+    for fr in run.files:
+        # the report keeps what the attempt that generated a file left out found (its reasons and warnings); its
+        # profiles stay this run's, planned over the files written
+        earlier = left_out.get(fr.rel_path)
+        if earlier is not None:
+            fr.reasons, fr.fixes, fr.messages = earlier.reasons, earlier.fixes, earlier.messages
+            for tp, earlier_tp in zip(fr.tables, earlier.tables):
+                tp.messages = earlier_tp.messages
+    run.seed_was_random = run.seed_was_random or was_random
     try:
         run.package = package.finish(run, destination, stage, settings.all_or_nothing, settings)
     except (OSError, UsageError):
@@ -835,7 +997,7 @@ def execute(settings: Settings, input_path: Path, out_dir: Path | None = None, r
         run.messages.append(Message("error", "sharing_promotion", "the output could not be moved into the output folder, so nothing was written to it",
                                     fix="choose a new or empty output folder on the same drive as the report folder"))
         for fr in run.files:
-            fr.fail("not written: the output could not be moved into the output folder")
+            fr.fail("not written: the output could not be moved into the output folder", code="sharing_promotion")
         run.docs = {}
     run.out_dir = destination
     report_mod.write_report_files(local_report, report_mod.build_report(run, settings))

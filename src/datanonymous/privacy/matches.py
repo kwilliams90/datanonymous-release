@@ -15,6 +15,11 @@
   every missingness pattern stay exactly the same. Columns grouped by
   ``structure.swap_groups`` (AREA D, e.g. a functional-dependency pair) move together.
 * ``--max-row-matches PCT``: remaining matches above PCT percent fail the file.
+* Sharing mode (``baseline=True``; issue 11, its research note on coincidental equality): a table with fewer than two
+  independent comparison groups is not checked (a swap inside one group never changes how many rows match), and
+  matches that would otherwise block are compared with a chance baseline: the comparison groups are shuffled
+  against each other ``BASELINE_REPLICATES`` times. Matches no more common than that baseline are coincidental, so
+  the file is written with the utility warning ``row_matches_coincidental``; anything above it still blocks.
 """
 
 from __future__ import annotations
@@ -30,6 +35,10 @@ from ..profile.stats import missing_mask
 
 MAX_ROUNDS = 10
 REPORT_ONLY_RATE = 0.20
+#: Layer 1 of the issue-11 note: shuffles of the comparison groups, and the thresholds that call matches coincidental
+BASELINE_REPLICATES = 200
+MAX_EXCESS_RISK = 0.05
+MIN_P_VALUE = 0.01
 
 
 def comparable(p: ColumnProfile) -> bool:
@@ -86,8 +95,10 @@ def real_keys(tp: TableProfile, raw_columns: list[np.ndarray]) -> None:
 
 
 def enforce(tp: TableProfile, synth: SyntheticTable, rng: np.random.Generator,
-            max_row_matches: float | None) -> dict[str, Any]:
-    """Swap-redraw chance matches in ``synth`` (in place); returns the privacy summary."""
+            max_row_matches: float | None, baseline: bool = False) -> dict[str, Any]:
+    """Swap-redraw chance matches in ``synth`` (in place); returns the privacy summary. ``baseline`` (sharing mode
+    without ``--refuse-unsupported``) skips tables with one comparison group and judges blocking matches against the
+    chance baseline."""
     mode, cols = plan(tp)
     names = [tp.columns[i].name for i in cols]
     summary: dict[str, Any] = {"mode": mode, "columns": names, "checked": bool(cols)}
@@ -97,6 +108,11 @@ def enforce(tp: TableProfile, synth: SyntheticTable, rng: np.random.Generator,
     by_index = {c.index: c for c in synth.columns}
     role = "entity" if mode == "entity" else "row"
     carried, group_of = _groups(tp, cols, role)
+    groups = _independent_groups(group_of, len(cols))
+    if baseline and len(groups) <= 1 and max_row_matches is None:
+        summary.update(checked=False, note="fewer than two independent comparable column groups; "
+                                           "per-column sharing support applies")
+        return summary
     unit_cols = cols + carried
     profiles = [tp.columns[i] for i in unit_cols]
     if mode == "entity":
@@ -128,10 +144,6 @@ def enforce(tp: TableProfile, synth: SyntheticTable, rng: np.random.Generator,
         summary["report_only"] = True
         summary["remaining_matches"] = initial
         summary["remaining_rate"] = round(rate, 6)
-        synth.messages.append(Message(
-            "warning", "row_matches_report_only",
-            f"{initial} of {n} synthetic {'entities' if mode == 'entity' else 'rows'} ({rate:.1%}) equal a real one "
-            f"on all compared columns by chance; above 20% the tool reports instead of swapping (D23)"))
     else:
         summary["report_only"] = False
         while m.any() and rounds < MAX_ROUNDS:
@@ -143,6 +155,10 @@ def enforce(tp: TableProfile, synth: SyntheticTable, rng: np.random.Generator,
         summary["remaining_matches"] = int(m.sum())
         summary["remaining_rate"] = round(float(m.mean()) if n else 0.0, 6)
     summary.update(rounds=rounds, swaps=swaps)
+    if baseline and summary["remaining_matches"]:
+        observed = summary["remaining_matches"] / n
+        summary["baseline"] = _judge(observed, _baseline_rates(keys, real, groups, missing, sizes, rng), n)
+        summary["coincidental"] = summary["baseline"]["coincidental"]
     # write back
     if mode == "entity":
         for i, u in zip(unit_cols, units):
@@ -151,7 +167,19 @@ def enforce(tp: TableProfile, synth: SyntheticTable, rng: np.random.Generator,
         for i, u in zip(unit_cols, units):
             by_index[i].values = u
     remaining = summary["remaining_matches"]
-    if remaining and not summary["report_only"]:
+    if summary.get("coincidental"):
+        b = summary["baseline"]
+        synth.messages.append(Message(
+            "warning", "row_matches_coincidental",
+            f"{remaining} of {n} synthetic {'entities' if mode == 'entity' else 'rows'} ({remaining / n:.1%}) equal a "
+            f"real one on all compared columns; columns shuffled independently match {b['rate']:.1%} on average, so "
+            f"these are chance matches (excess risk {b['excess_risk']:.3f}, p = {b['p_value']:.3f})"))
+    elif summary["report_only"]:
+        synth.messages.append(Message(
+            "warning", "row_matches_report_only",
+            f"{initial} of {n} synthetic {'entities' if mode == 'entity' else 'rows'} ({rate:.1%}) equal a real one "
+            f"on all compared columns by chance; above 20% the tool reports instead of swapping (D23)"))
+    elif remaining:
         synth.messages.append(Message("warning", "row_matches_remaining",
                                       f"{remaining} synthetic {'entities' if mode == 'entity' else 'rows'} still equal "
                                       f"a real one after {rounds} swap rounds"))
@@ -182,6 +210,68 @@ def _groups(tp: TableProfile, cols: list[int], role: str) -> tuple[list[int], li
             if pos[c] < len(cols):
                 group_of[pos[c]] = sorted(set(group_of[pos[c]]) | set(positions))
     return carried, group_of
+
+
+def _independent_groups(group_of: list[list[int]], n_keys: int) -> list[list[int]]:
+    """The comparison columns' independent swap groups, as lists of key positions (carried columns are not hashed)."""
+    out: list[list[int]] = []
+    seen: set[tuple[int, ...]] = set()
+    for members in group_of:
+        key = tuple(members)
+        if key not in seen:
+            seen.add(key)
+            out.append([g for g in members if g < n_keys])
+    return out
+
+
+def _baseline_rates(keys: list[np.ndarray], real: np.ndarray, groups: list[list[int]], missing: list[np.ndarray],
+                    sizes: np.ndarray | None, rng: np.random.Generator) -> np.ndarray:
+    """Match rates of ``BASELINE_REPLICATES`` shuffles: the first group stays, each other group is moved to other
+    rows as a block, only between rows with its missing state (and, for entities, row count), as ``_swap_one`` does."""
+    from ..profile.codes import codes_of
+
+    n = len(keys[0])
+    strata = []
+    for group in groups[1:]:
+        code = np.zeros(n, dtype=np.int64) if sizes is None else sizes.astype(np.int64) << len(group)
+        for bit, g in enumerate(group):
+            code |= missing[g].astype(np.int64) << bit
+        strata.append((group, code, np.argsort(code, kind="stable")))
+    # shuffle value codes, then hash each distinct combination once: a row's hash depends only on its values
+    factors = [codes_of(np.asarray(k, dtype=object)) for k in keys]
+    codes = np.stack([c for c, _ in factors], axis=1)
+    levels = [np.asarray(uniques, dtype=object) for _, uniques in factors]
+    sizes_of = [max(len(u), 1) for u in levels]
+    packed = float(np.prod(sizes_of, dtype=float)) < 2.0 ** 62  # one int64 per row names its combination
+    radix = np.cumprod([1] + sizes_of[:-1], dtype=np.int64) if packed else None
+    rates = np.empty(BASELINE_REPLICATES)
+    for b in range(BASELINE_REPLICATES):
+        shuffled = codes.copy()
+        for group, code, at in strata:
+            take = np.lexsort((rng.random(n), code))  # a random order inside each stratum, strata in ``at``'s order
+            source = np.empty(n, dtype=np.int64)
+            source[at] = take
+            shuffled[:, group] = codes[source][:, group]
+        if packed:
+            first, inverse = np.unique(shuffled @ radix, return_index=True, return_inverse=True)[1:]
+            combos = shuffled[first]
+        else:
+            combos, inverse = np.unique(shuffled, axis=0, return_inverse=True)
+        values = [uniques[combos[:, j]] for j, uniques in enumerate(levels)]
+        rates[b] = np.isin(row_hashes(values), real)[inverse.reshape(-1)].mean()
+    return rates
+
+
+def _judge(observed: float, rates: np.ndarray, n: int) -> dict[str, Any]:
+    """Layer 1: matches are coincidental when the excess over the baseline is small and not significant."""
+    mean = float(rates.mean())
+    excess = observed - mean
+    risk = max(0.0, excess) / (1 - mean) if mean < 1 else 0.0
+    p_value = (1 + int((rates >= observed - 1e-12).sum())) / (len(rates) + 1)
+    coincidental = risk <= MAX_EXCESS_RISK and (p_value > MIN_P_VALUE or excess <= 2 / n)
+    return {"rate": round(mean, 6), "sd": round(float(rates.std(ddof=1)), 6), "excess": round(excess, 6),
+            "excess_risk": round(risk, 6), "p_value": round(p_value, 6), "replicates": len(rates),
+            "coincidental": coincidental}
 
 
 def _swap_one(r: int, units: list[np.ndarray], missing: list[np.ndarray], group_of: list[list[int]],

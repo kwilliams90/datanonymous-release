@@ -178,7 +178,7 @@ def test_entity_fidelity_receives_exact_nul_counts(tmp_path, monkeypatch):
     monkeypatch.setattr(registry, "get", lambda *args: handler)
     monkeypatch.setattr(registry, "output_handler", lambda *args: handler)
     monkeypatch.setattr(pipeline, "generate_table", lambda *args: st)
-    monkeypatch.setattr(pipeline.matches, "enforce", lambda *args: {})
+    monkeypatch.setattr(pipeline.matches, "enforce", lambda *args, **kwargs: {})
     monkeypatch.setattr(pipeline.structure_mod, "finalize_rows", lambda *args: [])
     monkeypatch.setattr(leaks, "scan_table", lambda *args: [])
     monkeypatch.setattr(pipeline.selfcheck, "compare", lambda *args: [])

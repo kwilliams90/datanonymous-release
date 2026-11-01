@@ -223,6 +223,10 @@ problem("multi_year_snapshots", "This table seems to hold the same people in sev
         "No action is needed unless the yearly structure matters.")
 problem("row_matches_remaining", "Some rows in the shared copy are the same as real rows by chance, even after retrying.",
         "Leave out a column that makes rows easy to match with `--exclude`, or add variety to the source columns.")
+problem("row_matches_coincidental", "Some rows in the shared copy are the same as real rows by chance, because this table "
+        "has few possible combinations of values; its columns were made independently of each other, so these rows "
+        "are no more common than chance.",
+        "No action is needed. To make such rows rarer, add variety to the source columns.")
 problem("row_matches_report_only", "A share of rows in the shared copy are the same as real rows by chance.",
         "Leave out a column that makes rows easy to match with `--exclude`, or add variety to the source columns.")
 

@@ -580,7 +580,8 @@ def generate_file(fr: FileResult, settings: Settings, run: RunResult, reg: IdReg
             st = generate_table(generation_profile, ctx)
             generated_profile = st.profile
             priv = matches.enforce(generated_profile, st, stream(run.seed, fr.rel_path, tp.name or "", "__privacy__"),
-                                   settings.max_row_matches)
+                                   settings.max_row_matches,
+                                   baseline=settings.mode == "sharing" and not settings.refuse_unsupported)
             fr.privacy.append(priv)
             st.messages.extend(structure_mod.finalize_rows(
                 generated_profile, st, lambda purpose, _t=tp.name or "": stream(run.seed, fr.rel_path, _t, "__finalize__", purpose),

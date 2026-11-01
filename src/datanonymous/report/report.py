@@ -587,7 +587,11 @@ def _match_check(fr: FileResult) -> dict[str, str]:
             continue
         unit = "entities" if priv.get("mode") == "entity" else "rows"
         rem = int(priv.get("remaining_matches") or 0)
-        if priv.get("report_only"):
+        if priv.get("coincidental"):
+            results.append(WARN)
+            details.append(f"{rem} of {priv.get('units')} {unit} match a real one by chance, no more often than "
+                           f"independently shuffled columns ({priv['baseline']['rate']:.1%} expected)")
+        elif priv.get("report_only"):
             results.append(WARN)
             details.append(f"{rem} of {priv.get('units')} {unit} match a real one by chance (expected rate above "
                            "20%: reported, not swapped)")
@@ -858,6 +862,11 @@ def _table_markdown(fr: FileResult, t_i: int, tp: TableProfile) -> list[str]:
             lines.append(f"- Chance matches ({priv['mode']}): {priv.get('initial_matches')} before, "
                          f"{priv.get('remaining_matches')} after {priv.get('rounds')} swap rounds"
                          + (" (report only)" if priv.get("report_only") else ""))
+            if priv.get("baseline"):
+                b = priv["baseline"]
+                lines.append(f"- Chance baseline: {b['rate']:.1%} (sd {b['sd']:.1%}, {b['replicates']} shuffles); "
+                             f"excess risk {b['excess_risk']:.3f}, p = {b['p_value']:.3f}: "
+                             + ("coincidental" if b["coincidental"] else "above chance"))
         else:
             lines.append(f"- Chance matches: {priv.get('note', 'not checked')}")
     lines.append("")

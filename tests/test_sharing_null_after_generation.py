@@ -21,7 +21,8 @@ from datanonymous.pipeline import execute, exit_code
 from datanonymous.privacy.sharing_policy import blocking_findings
 from datanonymous.profile import structure as structure_mod
 
-from release_corpus import corpus_rows, read_records, student_id, write_corpus
+from planted_matches import plant_row_copies, survey_rows, write_survey
+from release_corpus import read_records, student_id
 
 N = 60
 SEED = "573291"
@@ -143,36 +144,28 @@ def test_the_regenerated_file_is_reproducible_from_the_seed_the_report_gives(tmp
     assert read_records(out / "roster.csv") == read_records(out_by_hand / "roster.csv")
 
 
-def test_a_file_with_row_level_findings_is_still_left_out(tmp_path):
+def test_a_file_with_row_level_findings_is_still_left_out(tmp_path, monkeypatch):
+    # chance matches no longer block (issue 11), so a planted copy of real rows stands in for a row-level finding
     original, out, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
-    write_corpus(original, "categorical_only")
+    write_survey(original / "survey.csv")
+    plant_row_copies(monkeypatch, 0.10)
     run = execute(Settings(mode="sharing", seed=573291), original, out, report)
-    refused = {f.rel_path for f in run.files
-               if any(m.code == "row_matches_report_only" for m in f.all_messages())}
-    assert refused
-    assert all(not f.written for f in run.files if f.rel_path in refused)
-    assert not {p.name for p in out.glob("*.csv")} & refused
+    survey = next(f for f in run.files if f.rel_path == "survey.csv")
+    assert any(m.code == "row_matches_report_only" for m in survey.all_messages())
+    assert not survey.written and not (out / "survey.csv").exists()
     assert not any(p.role == "null" for f in run.files for tp in f.tables for p in tp.columns)
     assert exit_code(run) == 3
-    failures = _failures(report)
-    assert all(name in failures for name in refused)
+    assert "survey.csv" in _failures(report)
 
 
-def test_a_row_level_finding_next_to_an_id_like_column_still_leaves_the_file_out(tmp_path):
-    original, out, report = tmp_path / "original", tmp_path / "synthetic", tmp_path / "local-report"
-    write_corpus(original, "categorical_only")
-    run = execute(Settings(mode="sharing", seed=573291), original, out, report)
-    refused = sorted(f.rel_path for f in run.files
-                     if any(m.code == "row_matches_report_only" for m in f.all_messages()))
-    assert refused
-    name = refused[0]
-    rows = corpus_rows("categorical_only")[name]
-    _write(original / name, [{**row, "Locker": _locker(k)} for k, row in enumerate(rows)])
-    base = tmp_path / "with-locker"
-    result, out, report = _cli(original, base)
+def test_a_row_level_finding_next_to_an_id_like_column_still_leaves_the_file_out(tmp_path, monkeypatch):
+    original = tmp_path / "original"
+    write_survey(original / "survey.csv", [{**row, "Locker": _locker(k)} for k, row in enumerate(survey_rows())])
+    plant_row_copies(monkeypatch, 0.10)
+    result, out, report = _cli(original, tmp_path / "with-locker")
     assert result.exit_code == 3, result.output
-    assert not (out / name).exists()
-    assert name in _failures(report)
+    assert not (out / "survey.csv").exists()
+    assert "survey.csv" in _failures(report)
 
 
 def test_refuse_unsupported_leaves_the_file_out_as_before(tmp_path):

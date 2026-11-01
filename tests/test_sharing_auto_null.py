@@ -197,18 +197,17 @@ def test_the_report_tells_operator_nulls_from_automatic_ones(tmp_path):
     assert "automatically" in auto and "describes another person" in auto
 
 
-@pytest.mark.parametrize("also_null", [[], ["--null", "Other_Score"]], ids=["written", "row_matches"])
+@pytest.mark.parametrize("also_null", [[], ["--null", "Other_Score"]], ids=["written", "one_compared_column"])
 def test_an_automatic_null_gives_what_nulling_the_column_by_hand_gives(tmp_path, also_null):
     """The column takes the same path as --null: same output, and the same privacy checks of the rest of the file (a
-    roster left with only Score has synthetic rows equal to real ones, so it is left out either way)."""
+    roster left with only Score has one compared column, so the whole-row match check is skipped either way)."""
     original = tmp_path / "original"
     _roster(original, "Parental_Education_Level")
     auto, out_auto, report_auto = _cli(original, tmp_path / "auto", *also_null)
     by_hand, out_by_hand, report_by_hand = _cli(original, tmp_path / "by-hand", *also_null,
                                                 "--null", "Parental_Education_Level")
-    assert auto.exit_code == by_hand.exit_code == (3 if also_null else 0), (auto.output, by_hand.output)
+    assert auto.exit_code == by_hand.exit_code == 0, (auto.output, by_hand.output)
     assert sorted(p.name for p in out_auto.glob("*.csv")) == sorted(p.name for p in out_by_hand.glob("*.csv"))
+    assert (out_auto / "roster.csv").is_file()
     for path in out_auto.glob("*.csv"):
         assert path.read_bytes() == (out_by_hand / path.name).read_bytes()
-    if also_null:
-        assert "roster.csv" in (report_auto / "sharing-failures.csv").read_text(encoding="utf-8")

@@ -672,16 +672,24 @@ def test_foreign_staging_artifact_blocks_promotion(tmp_path, monkeypatch):
     assert run.package["inventory_sha256"] == {}
 
 
-def test_saturated_categorical_only_tables_are_still_refused(tmp_path):
-    _, output, report, run = _execute(tmp_path, "categorical_only")
-    refused = {f.rel_path for f in run.files
-               if any(m.code == "row_matches_report_only" for m in f.all_messages())}
-    assert refused
-    assert all(not f.written for f in run.files if f.rel_path in refused)
+@pytest.mark.parametrize("seed", [573291, 1, 2])
+def test_saturated_categorical_only_tables_are_written_with_chance_matches(tmp_path, seed):
+    """Issue 11: iep.csv and roster.csv have so few combinations that about half their rows, or all, equal a real row
+    by chance. That is what shuffling the independently generated columns gives too, so the files are written and the
+    matches reported as coincidental, not left out."""
+    _, output, report, run = _execute(tmp_path, "categorical_only", seed)
+    chance = {f.rel_path for f in run.files
+              if any(m.code == "row_matches_coincidental" for m in f.all_messages())}
+    assert {"iep.csv", "roster.csv"} <= chance
+    assert not any(m.code.startswith("row_matches_") and m.code != "row_matches_coincidental"
+                   for f in run.files for m in f.all_messages())
+    assert all(f.written for f in run.files) and chance <= set(hash_inventory(output))
     assert run.package["released"], _diagnostic(run)
-    assert not refused & set(hash_inventory(output))
-    assert refused <= {r["input_path"] for r in _failures(report)}
-    assert exit_code(run) == 3
+    assert exit_code(run) == 0
+    for f in run.files:
+        for priv in f.privacy:
+            if priv.get("coincidental"):
+                assert priv["baseline"]["excess_risk"] <= 0.05 and priv["baseline"]["replicates"] == 200
 
 
 def test_a_routine_skip_alone_prints_no_were_not_written_line_but_is_still_logged(tmp_path):
